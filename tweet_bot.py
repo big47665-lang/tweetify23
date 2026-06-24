@@ -34,51 +34,47 @@ SEEN_IDS_FILE = Path("seen_tweet_ids.json")
 # ═══════════════════════════════════════════════════════════════
 
 CATEGORY_ACCOUNTS = {
-"😂 Funny": [   
-     "dril",   
-     "gaming_leake",   
-     "funnytweeter",   
-     "shitpost_2077",   
-     "middleclassfancy",   
- ],   
- "🏛️ Political": [   
-     "Reuters",   
-     "AP",   
-     "BBCWorld",   
-     "politico",   
-     "axios",   
- ],   
- "📰 News": [   
-     "BBCBreaking",   
-     "Reuters",   
-     "AP",   
-     "nytimes",   
-     "guardian",   
- ],   
- "🎮 Gaming": [   
-     "IGN",   
-     "PlayStation",   
-     "Xbox",   
-     "",   
-     "GameSpot",   
-     "Dexerto",   
- ],   
- "🤦 Unhinged": [   
-     "dril",   
-     "NotGaryBusey",   
-     "TweetsByKosta",   
-     "middleclassfancy",   
-     "insaneposes",   
- ],   
- "🇮🇷 Persian": [   
-     "IranIntl_Fa",   
-     "MatinSenPai",   
-     "BhFak46419",   
-     "manototv",   
-     "IranWire",   
-     "Realneo101",   
-     "thetwelfth_Imam" 
-   ],
+    "Funny": [
+        "dril",
+        "dadsaysjokes",
+        "funnytweeter",
+        "thedad",
+        "middleclassfancy",
+    ],
+    "Political": [
+        "Reuters",
+        "AP",
+        "BBCWorld",
+        "politico",
+        "axios",
+    ],
+    "News": [
+        "BBCBreaking",
+        "Reuters",
+        "AP",
+        "nytimes",
+        "guardian",
+    ],
+    "Gaming": [
+        "IGN",
+        "PlayStation",
+        "Xbox",
+        "NintendoAmerica",
+        "GameSpot",
+    ],
+    "Unhinged": [
+        "dril",
+        "NotGaryBusey",
+        "TweetsByKosta",
+        "middleclassfancy",
+    ],
+    "Persian": [
+        "IranIntl_Fa",
+        "bbcpersian",
+        "VOAIran",
+        "manototv",
+        "IranWire",
+    ],
 }
 
 # ═══════════════════════════════════════════════════════════════
