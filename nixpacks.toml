@@ -1,5 +1,1 @@
-[phases.install]
-cmds = ["pip install -r requirements.txt"]
 
-[start]
-cmd = "python tweet_bot.py"
