@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Tweet Sharing Telegram Bot - Nitter version
+Tweet Sharing Telegram Bot
+Uses Nitter RSS feeds - much harder to block than scraping
 No API key needed, completely free
 """
 
@@ -9,10 +10,10 @@ import json
 import logging
 import random
 import asyncio
+import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
 import requests
-from bs4 import BeautifulSoup
 from telegram import Bot
 from telegram.error import TelegramError
 
@@ -28,41 +29,51 @@ CHAT_IDS = [c.strip() for c in RAW_CHAT_IDS.split(",") if c.strip()]
 POST_INTERVAL = int(os.environ.get("POST_INTERVAL_SECONDS", 600))
 SEEN_IDS_FILE = Path("seen_tweet_ids.json")
 
+# Nitter instances to try
 NITTER_INSTANCES = [
     "https://nitter.net",
     "https://nitter.privacydev.net",
     "https://nitter.poast.org",
     "https://nitter.cz",
     "https://nitter.1d4.us",
+    "https://nitter.kavin.rocks",
 ]
 
-CATEGORIES = {
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (compatible; RSS reader)",
+    "Accept": "application/rss+xml, application/xml, text/xml",
+}
+
+# Popular accounts to pull tweets from per category
+# Using RSS from specific accounts is much more reliable than search
+CATEGORY_ACCOUNTS = {
     "😂 Funny": [
-        "funny lmao lol hilarious",
-        "خنده بامزه خندیدم",
+        "dril", "dadsaysjokes", "Seinfeld2000", "funnytweeter",
+        "thedad", "UncleDynamite", "middleclassfancy",
     ],
     "🏛️ Political": [
-        "politics government president election",
-        "سیاست دولت انتخابات",
+        "Reuters", "AP", "BBCWorld", "CNN", "politico",
+        "thehill", "axios",
     ],
     "📰 News": [
-        "breaking news urgent",
-        "خبر فوری اخبار",
+        "BreakingNews", "BBCBreaking", "Reuters", "AP",
+        "nytimes", "guardian",
     ],
     "🎮 Gaming": [
-        "gaming PlayStation Xbox Nintendo",
-        "بازی گیمینگ پلی استیشن",
+        "IGN", "Kotaku", "PlayStation", "Xbox",
+        "NintendoAmerica", "GameSpot", "PCGamer",
     ],
     "🤦 Unhinged": [
-        "ratio wild unbelievable",
-        "باورم نمیشه عجیبه",
+        "dril", "dadsaysjokes", "NotGaryBusey",
+        "thetoddler", "TweetsByKosta",
     ],
 }
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept-Language": "en-US,en;q=0.9",
-}
+# Persian news/content accounts
+PERSIAN_ACCOUNTS = [
+    "IranIntl_Fa", "bbcpersian", "VOAIran",
+    "manototv", "IranWire",
+]
 
 
 def load_seen_ids():
@@ -76,10 +87,11 @@ def save_seen_ids(ids):
 
 
 def get_working_instance():
-    random.shuffle(NITTER_INSTANCES)
-    for instance in NITTER_INSTANCES:
+    instances = NITTER_INSTANCES.copy()
+    random.shuffle(instances)
+    for instance in instances:
         try:
-            r = requests.get(instance, headers=HEADERS, timeout=8)
+            r = requests.get(instance, headers=HEADERS, timeout=6)
             if r.status_code == 200:
                 log.info("Using Nitter: %s", instance)
                 return instance
@@ -88,91 +100,59 @@ def get_working_instance():
     return None
 
 
-def is_persian(text):
-    count = sum(1 for c in text if "\u0600" <= c <= "\u06ff")
-    return count > 5
-
-
-def scrape_nitter(instance, query):
-    url = instance + "/search?q=" + requests.utils.quote(query) + "&f=tweets"
-    tweets = []
-
+def fetch_rss(instance, username):
+    url = instance + "/" + username + "/rss"
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=12)
+        resp = requests.get(url, headers=HEADERS, timeout=10)
         if resp.status_code != 200:
-            log.warning("Nitter %d for: %s", resp.status_code, query[:30])
             return []
 
-        soup = BeautifulSoup(resp.text, "html.parser")
-        items = soup.find_all("div", class_="timeline-item")
-        log.info("Found %d items for query: %s", len(items), query[:30])
+        root = ET.fromstring(resp.content)
+        ns = {"media": "http://search.yahoo.com/mrss/"}
+        items = root.findall(".//item")
+        tweets = []
 
         for item in items:
-            # Skip retweets
-            if item.find("div", class_="retweet-header"):
+            title = item.findtext("title", "").strip()
+            link = item.findtext("link", "").strip()
+            desc = item.findtext("description", "").strip()
+            guid = item.findtext("guid", link).strip()
+
+            # Clean up description (remove HTML tags simply)
+            import re
+            clean_desc = re.sub(r"<[^>]+>", "", desc).strip()
+            text = clean_desc if clean_desc else title
+
+            if not text or len(text) < 5:
                 continue
 
-            # Get tweet link
-            tweet_link = item.find("a", class_="tweet-link")
-            if not tweet_link:
-                continue
-            tweet_path = tweet_link.get("href", "")
-            tweet_id = tweet_path.strip("/").split("/")[-1].replace("#m", "")
-            if not tweet_id.isdigit():
-                continue
+            # Extract tweet ID from link
+            tweet_id = link.rstrip("/").split("/")[-1].replace("#m", "")
 
-            # Get text
-            content = item.find("div", class_="tweet-content")
-            if not content:
-                continue
-            text = content.get_text(separator=" ").strip()
-            if len(text) < 10:
-                continue
-
-            # Get username
-            username_tag = item.find("a", class_="username")
-            username = username_tag.get_text().strip().lstrip("@") if username_tag else "unknown"
-
-            fullname_tag = item.find("a", class_="fullname")
-            name = fullname_tag.get_text().strip() if fullname_tag else username
-
-            # Get stats
-            likes = 0
-            retweets = 0
-            stat_spans = item.find_all("span", class_="tweet-stat")
-            for span in stat_spans:
-                txt = span.get_text().strip().replace(",", "")
-                icon = span.find("span")
-                if icon:
-                    classes = " ".join(icon.get("class", []))
-                    try:
-                        num = int("".join(filter(str.isdigit, txt)))
-                    except ValueError:
-                        num = 0
-                    if "heart" in classes or "like" in classes:
-                        likes = num
-                    elif "retweet" in classes:
-                        retweets = num
-
-            tweet_url = "https://twitter.com" + tweet_path.replace("#m", "")
-            persian = is_persian(text)
+            # Detect language
+            persian_chars = sum(1 for c in text if "\u0600" <= c <= "\u06ff")
+            lang = "fa" if persian_chars > 5 else "en"
 
             tweets.append({
-                "id": tweet_id,
-                "text": text,
-                "lang": "fa" if persian else "en",
+                "id": tweet_id if tweet_id.isdigit() else guid,
+                "text": text[:500],
+                "lang": lang,
                 "username": username,
-                "name": name,
-                "url": tweet_url,
-                "likes": likes,
-                "retweets": retweets,
+                "name": username,
+                "url": "https://twitter.com/" + username,
+                "likes": 0,
+                "retweets": 0,
             })
 
-    except Exception as e:
-        log.warning("Scrape error for '%s': %s", query[:30], e)
+        log.info("Got %d tweets from @%s", len(tweets), username)
+        return tweets
 
-    log.info("Parsed %d valid tweets for: %s", len(tweets), query[:30])
-    return tweets
+    except ET.ParseError:
+        log.warning("RSS parse error for @%s", username)
+        return []
+    except Exception as e:
+        log.warning("RSS fetch error for @%s: %s", username, e)
+        return []
 
 
 def format_tweet(category, tweet):
@@ -180,8 +160,7 @@ def format_tweet(category, tweet):
     return (
         category + " " + lang_flag + "\n\n"
         + tweet["text"] + "\n\n"
-        + "👤 " + tweet["name"] + " (@" + tweet["username"] + ")\n"
-        + "❤️ " + str(tweet["likes"]) + "  🔁 " + str(tweet["retweets"]) + "\n"
+        + "👤 @" + tweet["username"] + "\n"
         + "🔗 " + tweet["url"]
     )
 
@@ -201,27 +180,40 @@ async def run_cycle(bot, seen_ids):
 
     instance = get_working_instance()
     if not instance:
-        log.error("All Nitter instances down, skipping cycle")
+        log.error("All Nitter instances down!")
         return
 
-    for category, queries in CATEGORIES.items():
-        for query in queries:
-            tweets = scrape_nitter(instance, query)
-            new_tweets = [t for t in tweets if t["id"] not in seen_ids]
+    posted = 0
 
-            if not new_tweets:
-                log.info("No new tweets for: %s", query[:30])
-                continue
+    # English accounts by category
+    for category, accounts in CATEGORY_ACCOUNTS.items():
+        account = random.choice(accounts)
+        tweets = fetch_rss(instance, account)
+        new_tweets = [t for t in tweets if t["id"] not in seen_ids]
 
+        if new_tweets:
             tweet = random.choice(new_tweets)
-            text = format_tweet(category, tweet)
-            await post_to_telegram(bot, text)
+            await post_to_telegram(bot, format_tweet(category, tweet))
             seen_ids.add(tweet["id"])
             save_seen_ids(seen_ids)
-            log.info("Posted [%s] by @%s", category, tweet["username"])
+            log.info("Posted [%s] from @%s", category, account)
+            posted += 1
             await asyncio.sleep(4)
 
-    log.info("=== Cycle done. Next in %ds ===", POST_INTERVAL)
+    # Persian accounts
+    persian_account = random.choice(PERSIAN_ACCOUNTS)
+    tweets = fetch_rss(instance, persian_account)
+    new_tweets = [t for t in tweets if t["id"] not in seen_ids]
+    if new_tweets:
+        tweet = random.choice(new_tweets)
+        tweet["lang"] = "fa"
+        await post_to_telegram(bot, format_tweet("📰 Persian News", tweet))
+        seen_ids.add(tweet["id"])
+        save_seen_ids(seen_ids)
+        log.info("Posted Persian tweet from @%s", persian_account)
+        posted += 1
+
+    log.info("=== Cycle done. Posted %d tweets. Next in %ds ===", posted, POST_INTERVAL)
 
 
 async def main():
@@ -236,7 +228,7 @@ async def main():
 
     bot = Bot(token=TELEGRAM_BOT_TOKEN)
     seen_ids = load_seen_ids()
-    log.info("Bot started. Posting to %d chat(s) every %ds", len(CHAT_IDS), POST_INTERVAL)
+    log.info("Bot started (RSS mode). Posting every %ds", POST_INTERVAL)
 
     while True:
         try:
