@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
 Tweet Sharing Telegram Bot
-- Sends tweets as screenshots (images)
-- Only shows @username
-- Easy to customize accounts at the top of the file
+- Beautiful tweet card images
+- Only link shown in caption
+- Easy account customization at the top
 """
 
 import os
@@ -13,11 +13,12 @@ import random
 import asyncio
 import re
 import io
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 import requests
 import xml.etree.ElementTree as ET
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from telegram import Bot
 from telegram.error import TelegramError
 
@@ -39,50 +40,50 @@ SEEN_IDS_FILE = Path("seen_tweet_ids.json")
 # ═══════════════════════════════════════════════════════════════
 
 CATEGORY_ACCOUNTS = {
-    "😂 Funny": [
-        "dril",
-        "dadsaysjokes",
-        "funnytweeter",
-        "shitpost_2077",
-        "middleclassfancy",
-    ],
-    "🏛️ Political": [
-        "Reuters",
-        "AP",
-        "BBCWorld",
-        "politico",
-        "axios",
-    ],
-    "📰 News": [
-        "BBCBreaking",
-        "Reuters",
-        "AP",
-        "nytimes",
-        "guardian",
-    ],
-    "🎮 Gaming": [
-        "IGN",
-        "PlayStation",
-        "Xbox",
-        "",
-        "GameSpot",
-        "Dexerto",
-    ],
-    "🤦 Unhinged": [
-        "dril",
-        "NotGaryBusey",
-        "TweetsByKosta",
-        "middleclassfancy",
-        "insaneposes",
-    ],
-    "🇮🇷 Persian": [
-        "IranIntl_Fa",
-        "MatinSenPai",
-        "BhFak46419",
-        "manototv",
-        "IranWire",
-        "Realneo101",
-        "thetwelfth_Imam",
+  "😂 Funny": [  
+      "dril",  
+      "dadsaysjokes",  
+      "funnytweeter",  
+      "shitpost_2077",  
+      "middleclassfancy",  
+  ],  
+  "🏛️ Political": [  
+      "Reuters",  
+      "AP",  
+      "BBCWorld",  
+      "politico",  
+      "axios",  
+  ],  
+  "📰 News": [  
+      "BBCBreaking",  
+      "Reuters",  
+      "AP",  
+      "nytimes",  
+      "guardian",  
+  ],  
+  "🎮 Gaming": [  
+      "IGN",  
+      "PlayStation",  
+      "Xbox",  
+      "",  
+      "GameSpot",  
+      "Dexerto",  
+  ],  
+  "🤦 Unhinged": [  
+      "dril",  
+      "NotGaryBusey",  
+      "TweetsByKosta",  
+      "middleclassfancy",  
+      "insaneposes",  
+  ],  
+  "🇮🇷 Persian": [  
+      "IranIntl_Fa",  
+      "MatinSenPai",  
+      "BhFak46419",  
+      "manototv",  
+      "IranWire",  
+      "Realneo101",  
+      "thetwelfth_Imam"
     ],
 }
 
@@ -99,6 +100,16 @@ NITTER_INSTANCES = [
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (compatible; RSS reader)",
     "Accept": "application/rss+xml, application/xml, text/xml",
+}
+
+# Category accent colors (R, G, B)
+CATEGORY_COLORS = {
+    "😂 Funny":      (255, 200, 0),
+    "🏛️ Political":  (99, 179, 237),
+    "📰 News":       (252, 129, 74),
+    "🎮 Gaming":     (154, 117, 234),
+    "🤦 Unhinged":   (252, 92, 125),
+    "🇮🇷 Persian":   (71, 207, 132),
 }
 
 
@@ -152,7 +163,7 @@ def fetch_rss(instance, username):
 
             tweets.append({
                 "id": tweet_id if tweet_id.isdigit() else guid,
-                "text": text[:400],
+                "text": text[:350],
                 "username": username,
                 "url": "https://twitter.com/" + username,
             })
@@ -165,148 +176,217 @@ def fetch_rss(instance, username):
         return []
 
 
+def draw_rounded_rect(draw, xy, radius, fill, outline=None, width=1):
+    x1, y1, x2, y2 = xy
+    draw.rectangle([x1 + radius, y1, x2 - radius, y2], fill=fill)
+    draw.rectangle([x1, y1 + radius, x2, y2 - radius], fill=fill)
+    draw.ellipse([x1, y1, x1 + radius * 2, y1 + radius * 2], fill=fill)
+    draw.ellipse([x2 - radius * 2, y1, x2, y1 + radius * 2], fill=fill)
+    draw.ellipse([x1, y2 - radius * 2, x1 + radius * 2, y2], fill=fill)
+    draw.ellipse([x2 - radius * 2, y2 - radius * 2, x2, y2], fill=fill)
+    if outline:
+        draw.arc([x1, y1, x1 + radius * 2, y1 + radius * 2], 180, 270, fill=outline, width=width)
+        draw.arc([x2 - radius * 2, y1, x2, y1 + radius * 2], 270, 360, fill=outline, width=width)
+        draw.arc([x1, y2 - radius * 2, x1 + radius * 2, y2], 90, 180, fill=outline, width=width)
+        draw.arc([x2 - radius * 2, y2 - radius * 2, x2, y2], 0, 90, fill=outline, width=width)
+        draw.line([x1 + radius, y1, x2 - radius, y1], fill=outline, width=width)
+        draw.line([x1 + radius, y2, x2 - radius, y2], fill=outline, width=width)
+        draw.line([x1, y1 + radius, x1, y2 - radius], fill=outline, width=width)
+        draw.line([x2, y1 + radius, x2, y2 - radius], fill=outline, width=width)
+
+
 def make_tweet_image(text, username, category):
-    # Card size
-    width = 800
-    padding = 40
-    avatar_size = 60
+    W = 900
+    PAD = 48
+    AVATAR = 64
 
-    # Colors — dark Twitter-like theme
-    bg_color = (21, 32, 43)
-    card_color = (25, 39, 52)
-    text_color = (255, 255, 255)
-    handle_color = (110, 118, 125)
-    accent_color = (29, 161, 242)
-    border_color = (56, 68, 77)
+    accent = CATEGORY_COLORS.get(category, (29, 161, 242))
+    dark_accent = tuple(max(0, c - 60) for c in accent)
 
-    # Try to load a font, fall back to default
-    try:
-        font_text = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 22)
-        font_handle = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 18)
-        font_category = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 20)
-    except Exception:
-        font_text = ImageFont.load_default()
-        font_handle = font_text
-        font_category = font_text
+    # Fonts
+    font_paths = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+    ]
+    bold_paths = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
+    ]
+
+    def load_font(paths, size):
+        for p in paths:
+            try:
+                return ImageFont.truetype(p, size)
+            except Exception:
+                continue
+        return ImageFont.load_default()
+
+    f_text    = load_font(font_paths, 26)
+    f_handle  = load_font(font_paths, 20)
+    f_cat     = load_font(bold_paths, 21)
+    f_small   = load_font(font_paths, 17)
 
     # Wrap text
-    def wrap_text(txt, font, max_width, draw):
+    def wrap(txt, font, max_w, draw):
         words = txt.split()
-        lines = []
-        current = ""
-        for word in words:
-            test = (current + " " + word).strip()
-            bbox = draw.textbbox((0, 0), test, font=font)
-            if bbox[2] <= max_width:
-                current = test
+        lines, cur = [], ""
+        for w in words:
+            test = (cur + " " + w).strip()
+            if draw.textbbox((0,0), test, font=font)[2] <= max_w:
+                cur = test
             else:
-                if current:
-                    lines.append(current)
-                current = word
-        if current:
-            lines.append(current)
+                if cur:
+                    lines.append(cur)
+                cur = w
+        if cur:
+            lines.append(cur)
         return lines
 
-    # First pass to calculate height
-    dummy = Image.new("RGB", (width, 100))
-    draw = ImageDraw.Draw(dummy)
-    max_text_width = width - padding * 2 - avatar_size - 20
-    lines = wrap_text(text, font_text, max_text_width, draw)
-    line_height = 30
-    text_block_height = len(lines) * line_height
+    dummy_img = Image.new("RGB", (W, 100))
+    dummy_draw = ImageDraw.Draw(dummy_img)
+    text_w = W - PAD * 2
+    lines = wrap(text, f_text, text_w, dummy_draw)
+    line_h = 36
+    text_h = len(lines) * line_h
 
-    total_height = padding + avatar_size + 20 + text_block_height + 60 + padding
+    # Layout heights
+    TOP_BAR    = 56   # category stripe
+    HEADER_H   = 90   # avatar + name row
+    TEXT_H     = text_h + 20
+    FOOTER_H   = 54
+    TOTAL_H    = TOP_BAR + HEADER_H + TEXT_H + FOOTER_H + 20
 
-    # Create real image
-    img = Image.new("RGB", (width, total_height), bg_color)
+    img = Image.new("RGB", (W, TOTAL_H), (10, 14, 20))
     draw = ImageDraw.Draw(img)
 
-    # Card background with rounded feel (border)
-    draw.rectangle([(10, 10), (width - 10, total_height - 10)], fill=card_color, outline=border_color, width=1)
+    # ── Gradient-ish background strips ───────────────────────────
+    for y in range(TOTAL_H):
+        ratio = y / TOTAL_H
+        r = int(10 + ratio * 8)
+        g = int(14 + ratio * 10)
+        b = int(20 + ratio * 18)
+        draw.line([(0, y), (W, y)], fill=(r, g, b))
 
-    # Category badge
-    cat_x = padding
-    cat_y = padding - 5
-    draw.text((cat_x, cat_y), category, font=font_category, fill=accent_color)
+    # ── Top accent bar ────────────────────────────────────────────
+    for x in range(W):
+        ratio = x / W
+        r = int(accent[0] * (1 - ratio * 0.4) + dark_accent[0] * ratio * 0.4)
+        g = int(accent[1] * (1 - ratio * 0.4) + dark_accent[1] * ratio * 0.4)
+        b = int(accent[2] * (1 - ratio * 0.4) + dark_accent[2] * ratio * 0.4)
+        draw.line([(x, 0), (x, TOP_BAR)], fill=(r, g, b))
 
-    # Avatar circle placeholder
-    av_x = padding
-    av_y = padding + 30
-    draw.ellipse([(av_x, av_y), (av_x + avatar_size, av_y + avatar_size)], fill=accent_color)
-    initial = username[0].upper() if username else "T"
-    draw.text((av_x + 18, av_y + 14), initial, font=font_category, fill=(255, 255, 255))
+    # Category label on bar
+    cat_bbox = draw.textbbox((0,0), category, font=f_cat)
+    cat_w = cat_bbox[2]
+    draw.text(((W - cat_w) // 2, (TOP_BAR - cat_bbox[3]) // 2), category, font=f_cat, fill=(255,255,255))
 
-    # Username @handle
-    handle_x = av_x + avatar_size + 15
-    handle_y = av_y + 10
-    draw.text((handle_x, handle_y), "@" + username, font=font_handle, fill=handle_color)
+    # ── Card body ─────────────────────────────────────────────────
+    card_y = TOP_BAR + 10
+    card_h = TOTAL_H - TOP_BAR - 10
+    draw_rounded_rect(draw, (12, card_y, W - 12, TOTAL_H - 8), 18,
+                      fill=(18, 24, 34), outline=(40, 52, 68), width=1)
 
-    # Blue verified-style dot
-    dot_x = handle_x + draw.textbbox((0, 0), "@" + username, font=font_handle)[2] + 8
-    draw.ellipse([(dot_x, handle_y + 5), (dot_x + 12, handle_y + 17)], fill=accent_color)
+    # ── Avatar circle ─────────────────────────────────────────────
+    av_x = PAD
+    av_y = card_y + 18
+    # Glow
+    for r in range(6, 0, -1):
+        alpha = 30 + r * 8
+        glow = tuple(min(255, c + 40) for c in accent)
+        draw.ellipse([av_x - r, av_y - r, av_x + AVATAR + r, av_y + AVATAR + r],
+                     fill=(*glow, alpha) if False else glow)
+    draw.ellipse([av_x, av_y, av_x + AVATAR, av_y + AVATAR], fill=accent)
+    initial = username[0].upper()
+    ib = draw.textbbox((0,0), initial, font=f_cat)
+    draw.text((av_x + (AVATAR - ib[2]) // 2, av_y + (AVATAR - ib[3]) // 2 - 2),
+              initial, font=f_cat, fill=(255,255,255))
 
-    # Tweet text
-    text_y = av_y + avatar_size + 20
+    # ── Name + handle ─────────────────────────────────────────────
+    name_x = av_x + AVATAR + 16
+    name_y = av_y + 8
+    draw.text((name_x, name_y), username, font=f_cat, fill=(240,240,240))
+    # Blue checkmark style badge
+    check_x = name_x + draw.textbbox((0,0), username, font=f_cat)[2] + 8
+    draw.ellipse([check_x, name_y + 3, check_x + 18, name_y + 21], fill=accent)
+    draw.text((check_x + 3, name_y + 2), "✓", font=f_small, fill=(255,255,255))
+    draw.text((name_x, name_y + 30), "@" + username, font=f_handle, fill=(100, 116, 135))
+
+    # ── Divider ───────────────────────────────────────────────────
+    div_y = card_y + HEADER_H
+    draw.line([(PAD, div_y), (W - PAD, div_y)], fill=(35, 46, 62), width=1)
+
+    # ── Tweet text ────────────────────────────────────────────────
+    ty = div_y + 18
     for line in lines:
-        draw.text((padding, text_y), line, font=font_text, fill=text_color)
-        text_y += line_height
+        draw.text((PAD, ty), line, font=f_text, fill=(225, 232, 240))
+        ty += line_h
 
-    # Twitter/X logo watermark bottom right
-    draw.text((width - padding - 20, total_height - padding - 10), "𝕏", font=font_category, fill=handle_color)
+    # ── Footer ────────────────────────────────────────────────────
+    footer_y = TOTAL_H - FOOTER_H
+    draw.line([(PAD, footer_y), (W - PAD, footer_y)], fill=(35, 46, 62), width=1)
 
-    # Convert to bytes
-    img_bytes = io.BytesIO()
-    img.save(img_bytes, format="PNG")
-    img_bytes.seek(0)
-    return img_bytes
+    # X logo + "View on X"
+    draw.text((PAD, footer_y + 14), "𝕏  View on X", font=f_small, fill=(100, 116, 135))
+
+    # Timestamp
+    ts = datetime.now(timezone.utc).strftime("%H:%M · %b %d, %Y")
+    ts_w = draw.textbbox((0,0), ts, font=f_small)[2]
+    draw.text((W - PAD - ts_w, footer_y + 14), ts, font=f_small, fill=(70, 88, 108))
+
+    # ── Thin accent line at very bottom ──────────────────────────
+    for x in range(W):
+        ratio = x / W
+        r = int(accent[0] * (1 - ratio) + dark_accent[0] * ratio)
+        g = int(accent[1] * (1 - ratio) + dark_accent[1] * ratio)
+        b = int(accent[2] * (1 - ratio) + dark_accent[2] * ratio)
+        draw.point((x, TOTAL_H - 1), fill=(r, g, b))
+
+    out = io.BytesIO()
+    img.save(out, format="PNG", optimize=True)
+    out.seek(0)
+    return out
 
 
 async def post_tweet_image(bot, tweet, category):
     try:
         img = make_tweet_image(tweet["text"], tweet["username"], category)
-        caption = "@" + tweet["username"] + "\n🔗 " + tweet["url"]
+        # Clean caption: just the link
+        caption = "🔗 " + tweet["url"]
         for chat_id in CHAT_IDS:
             try:
-                await bot.send_photo(
-                    chat_id=chat_id,
-                    photo=img,
-                    caption=caption,
-                )
+                await bot.send_photo(chat_id=chat_id, photo=img, caption=caption)
                 img.seek(0)
-                log.info("Sent image to %s", chat_id)
                 await asyncio.sleep(1)
             except TelegramError as e:
                 log.error("Telegram error %s: %s", chat_id, e)
     except Exception as e:
-        log.error("Image creation failed: %s", e)
-        # Fallback to text
-        text = category + "\n\n" + tweet["text"] + "\n\n@" + tweet["username"] + "\n" + tweet["url"]
+        log.error("Image error: %s", e)
+        # Text fallback
+        fallback = category + "\n\n" + tweet["text"][:300] + "\n\n🔗 " + tweet["url"]
         for chat_id in CHAT_IDS:
             try:
-                await bot.send_message(chat_id=chat_id, text=text)
+                await bot.send_message(chat_id=chat_id, text=fallback)
             except TelegramError as te:
-                log.error("Fallback text error %s: %s", chat_id, te)
+                log.error("Fallback error %s: %s", chat_id, te)
 
 
 async def run_cycle(bot, seen_ids):
     log.info("=== Cycle started %s ===", datetime.now(timezone.utc).isoformat())
-
     instance = get_working_instance()
     if not instance:
         log.error("All Nitter instances down!")
         return
 
     posted = 0
-
     for category, accounts in CATEGORY_ACCOUNTS.items():
         account = random.choice(accounts)
         tweets = fetch_rss(instance, account)
         new_tweets = [t for t in tweets if t["id"] not in seen_ids]
-
         if not new_tweets:
             log.info("No new tweets from @%s", account)
             continue
-
         tweet = random.choice(new_tweets)
         await post_tweet_image(bot, tweet, category)
         seen_ids.add(tweet["id"])
