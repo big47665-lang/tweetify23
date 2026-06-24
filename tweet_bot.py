@@ -43,7 +43,7 @@ CATEGORY_ACCOUNTS = {
         "dril",
         "dadsaysjokes",
         "funnytweeter",
-        "thedad",
+        "shitpost_2077",
         "middleclassfancy",
     ],
     "🏛️ Political": [
@@ -64,21 +64,25 @@ CATEGORY_ACCOUNTS = {
         "IGN",
         "PlayStation",
         "Xbox",
-        "NintendoAmerica",
+        "",
         "GameSpot",
+        "Dexerto",
     ],
     "🤦 Unhinged": [
         "dril",
         "NotGaryBusey",
         "TweetsByKosta",
         "middleclassfancy",
+        "insaneposes",
     ],
     "🇮🇷 Persian": [
         "IranIntl_Fa",
-        "bbcpersian",
-        "VOAIran",
+        "MatinSenPai",
+        "BhFak46419",
         "manototv",
         "IranWire",
+        "Realneo101",
+        "thetwelfth_Imam",
     ],
 }
 
