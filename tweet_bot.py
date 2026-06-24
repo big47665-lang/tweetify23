@@ -34,7 +34,7 @@ SEEN_IDS_FILE = Path("seen_tweet_ids.json")
 # ═══════════════════════════════════════════════════════════════
 
 CATEGORY_ACCOUNTS = {
- "😂 Funny": [   
+  "😂 Funny": [   
      "dril",   
      "gaming_leake",   
      "funnytweeter",   
