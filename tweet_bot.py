@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 Tweet Sharing Telegram Bot
-- Sends tweets as realistic tweet screenshots
-- Zero caption - just the image, like a real screenshot
+- Realistic tweet screenshots, no emojis in image (uses text icons instead)
+- Zero caption
 """
 
 import os
@@ -31,45 +31,44 @@ SEEN_IDS_FILE = Path("seen_tweet_ids.json")
 
 # ═══════════════════════════════════════════════════════════════
 #   CUSTOMIZE YOUR ACCOUNTS HERE
-#   Add or remove any Twitter/X username you want per category
 # ═══════════════════════════════════════════════════════════════
 
 CATEGORY_ACCOUNTS = {
-    "😂 Funny": [
+    "Funny": [
         "dril",
         "dadsaysjokes",
         "funnytweeter",
         "thedad",
         "middleclassfancy",
     ],
-    "🏛️ Political": [
+    "Political": [
         "Reuters",
         "AP",
         "BBCWorld",
         "politico",
         "axios",
     ],
-    "📰 News": [
+    "News": [
         "BBCBreaking",
         "Reuters",
         "AP",
         "nytimes",
         "guardian",
     ],
-    "🎮 Gaming": [
+    "Gaming": [
         "IGN",
         "PlayStation",
         "Xbox",
         "NintendoAmerica",
         "GameSpot",
     ],
-    "🤦 Unhinged": [
+    "Unhinged": [
         "dril",
         "NotGaryBusey",
         "TweetsByKosta",
         "middleclassfancy",
     ],
-    "🇮🇷 Persian": [
+    "Persian": [
         "IranIntl_Fa",
         "bbcpersian",
         "VOAIran",
@@ -91,6 +90,15 @@ NITTER_INSTANCES = [
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (compatible; RSS reader)",
     "Accept": "application/rss+xml, application/xml, text/xml",
+}
+
+CATEGORY_COLORS = {
+    "Funny":    (234, 179, 8),
+    "Political":(59, 130, 246),
+    "News":     (239, 68, 68),
+    "Gaming":   (139, 92, 246),
+    "Unhinged": (236, 72, 153),
+    "Persian":  (16, 185, 129),
 }
 
 
@@ -129,19 +137,21 @@ def fetch_rss(instance, username):
         tweets = []
         for item in items:
             title = item.findtext("title", "").strip()
-            link = item.findtext("link", "").strip()
-            desc = item.findtext("description", "").strip()
-            guid = item.findtext("guid", link).strip()
+            link  = item.findtext("link", "").strip()
+            desc  = item.findtext("description", "").strip()
+            guid  = item.findtext("guid", link).strip()
             clean = re.sub(r"<[^>]+>", "", desc).strip()
-            text = clean if clean else title
+            # strip emoji from text so they don't appear as boxes
+            clean = re.sub(r"[^\x00-\x7F\u0600-\u06FF\u0750-\u077F ]", "", clean).strip()
+            text  = clean if clean else title
             if not text or len(text) < 5:
                 continue
             tweet_id = link.rstrip("/").split("/")[-1].replace("#m", "")
             tweets.append({
-                "id": tweet_id if tweet_id.isdigit() else guid,
-                "text": text[:350],
+                "id":       tweet_id if tweet_id.isdigit() else guid,
+                "text":     text[:350],
                 "username": username,
-                "url": "https://twitter.com/" + username,
+                "url":      "https://twitter.com/" + username,
             })
         log.info("Got %d tweets from @%s", len(tweets), username)
         return tweets
@@ -150,152 +160,146 @@ def fetch_rss(instance, username):
         return []
 
 
+def load_font(bold=False, size=20):
+    bold_paths = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
+    ]
+    reg_paths = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+    ]
+    for p in (bold_paths if bold else reg_paths):
+        try:
+            return ImageFont.truetype(p, size)
+        except Exception:
+            continue
+    return ImageFont.load_default()
+
+
+def wrap_text(text, font, max_w, draw):
+    words = text.split()
+    lines, cur = [], ""
+    for w in words:
+        test = (cur + " " + w).strip()
+        if draw.textbbox((0, 0), test, font=font)[2] <= max_w:
+            cur = test
+        else:
+            if cur:
+                lines.append(cur)
+            cur = w
+    if cur:
+        lines.append(cur)
+    return lines
+
+
 def make_tweet_screenshot(text, username, category):
-    """
-    Renders a card that looks like a real tweet screenshot:
-    - White background
-    - Avatar circle with initial
-    - Bold display name + @handle + verified badge
-    - Tweet text in black
-    - Like/retweet/reply icons row
-    - Subtle top label showing category
-    """
-    W = 900
-    PAD = 28
-    AVATAR = 56
-    BG = (255, 255, 255)
-    TEXT_BLACK = (15, 20, 25)
-    GRAY = (83, 100, 113)
-    LIGHT_GRAY = (239, 243, 244)
-    BLUE = (29, 155, 240)
-    BORDER = (207, 217, 222)
+    W       = 920
+    PAD     = 32
+    AVATAR  = 58
+    BG      = (255, 255, 255)
+    BLACK   = (15, 20, 25)
+    GRAY    = (83, 100, 113)
+    LGRAY   = (247, 249, 249)
+    BORDER  = (207, 217, 222)
+    BLUE    = (29, 155, 240)
+    accent  = CATEGORY_COLORS.get(category, BLUE)
 
-    # Fonts
-    def load_font(bold=False, size=20):
-        bold_paths = [
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-        ]
-        reg_paths = [
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-        ]
-        paths = bold_paths if bold else reg_paths
-        for p in paths:
-            try:
-                return ImageFont.truetype(p, size)
-            except Exception:
-                continue
-        return ImageFont.load_default()
-
-    f_name     = load_font(bold=True,  size=22)
-    f_handle   = load_font(bold=False, size=19)
-    f_text     = load_font(bold=False, size=26)
-    f_stats    = load_font(bold=False, size=18)
-    f_category = load_font(bold=True,  size=17)
-
-    # Wrap tweet text
-    def wrap(txt, font, max_w, draw):
-        words = txt.split()
-        lines, cur = [], ""
-        for w in words:
-            test = (cur + " " + w).strip()
-            if draw.textbbox((0, 0), test, font=font)[2] <= max_w:
-                cur = test
-            else:
-                if cur:
-                    lines.append(cur)
-                cur = w
-        if cur:
-            lines.append(cur)
-        return lines
+    f_name   = load_font(bold=True,  size=23)
+    f_handle = load_font(bold=False, size=19)
+    f_text   = load_font(bold=False, size=27)
+    f_stats  = load_font(bold=False, size=18)
+    f_cat    = load_font(bold=True,  size=17)
 
     dummy = Image.new("RGB", (W, 100), BG)
     ddraw = ImageDraw.Draw(dummy)
-    max_tw = W - PAD * 2
-    lines = wrap(text, f_text, max_tw, ddraw)
-    line_h = 38
+    lines  = wrap_text(text, f_text, W - PAD * 2, ddraw)
+    line_h = 40
 
-    # Heights of sections
-    CAT_H    = 38   # top category strip
-    HEAD_H   = 76   # avatar + name row
-    TEXT_H   = len(lines) * line_h + 24
-    STATS_H  = 52   # icons row
-    TOTAL_H  = CAT_H + HEAD_H + TEXT_H + STATS_H + 8
+    CAT_H   = 40
+    HEAD_H  = 80
+    TEXT_H  = len(lines) * line_h + 28
+    STATS_H = 52
+    TOTAL_H = CAT_H + HEAD_H + TEXT_H + STATS_H + 4
 
-    img = Image.new("RGB", (W, TOTAL_H), BG)
+    img  = Image.new("RGB", (W, TOTAL_H), BG)
     draw = ImageDraw.Draw(img)
 
-    # ── Category strip at top ─────────────────────────────────────
-    draw.rectangle([(0, 0), (W, CAT_H)], fill=LIGHT_GRAY)
-    cat_text = category + "  •  shared by bot"
-    draw.text((PAD, 10), cat_text, font=f_category, fill=GRAY)
+    # ── Category bar ─────────────────────────────────────────────
+    draw.rectangle([(0, 0), (W, CAT_H)], fill=accent)
+    cat_label = category.upper() + "  |  X / Twitter"
+    draw.text((PAD, 10), cat_label, font=f_cat, fill=(255, 255, 255))
 
-    # ── Header row ────────────────────────────────────────────────
-    hy = CAT_H + 12
-    # Avatar circle
-    av_x, av_y = PAD, hy
+    # ── Avatar ───────────────────────────────────────────────────
+    av_x = PAD
+    av_y = CAT_H + 12
     draw.ellipse([av_x, av_y, av_x + AVATAR, av_y + AVATAR], fill=BLUE)
     init = username[0].upper()
-    ib = draw.textbbox((0, 0), init, font=f_name)
+    ib   = draw.textbbox((0, 0), init, font=f_name)
     draw.text(
         (av_x + (AVATAR - ib[2]) // 2, av_y + (AVATAR - ib[3]) // 2 - 2),
         init, font=f_name, fill=(255, 255, 255)
     )
 
-    # Display name
-    name_x = av_x + AVATAR + 14
-    name_y = hy + 4
-    draw.text((name_x, name_y), username, font=f_name, fill=TEXT_BLACK)
+    # ── Name + handle ─────────────────────────────────────────────
+    nx = av_x + AVATAR + 14
+    ny = av_y + 4
+    draw.text((nx, ny), username, font=f_name, fill=BLACK)
 
-    # Blue verified checkmark circle
-    nw = draw.textbbox((0, 0), username, font=f_name)[2]
-    cx = name_x + nw + 6
-    cy = name_y + 3
-    draw.ellipse([cx, cy, cx + 20, cy + 20], fill=BLUE)
-    draw.text((cx + 4, cy + 1), "✓", font=f_stats, fill=(255, 255, 255))
+    # Verified badge — solid blue circle with white "v"
+    nw  = draw.textbbox((0, 0), username, font=f_name)[2]
+    bx  = nx + nw + 7
+    by  = ny + 2
+    draw.ellipse([bx, by, bx + 20, by + 20], fill=BLUE)
+    draw.text((bx + 5, by + 1), "v", font=f_stats, fill=(255, 255, 255))
 
-    # @handle underneath name
-    draw.text((name_x, name_y + 28), "@" + username, font=f_handle, fill=GRAY)
+    draw.text((nx, ny + 30), "@" + username, font=f_handle, fill=GRAY)
 
-    # Time ago (fake but realistic)
-    time_str = str(random.randint(1, 23)) + "h"
-    tw = draw.textbbox((0, 0), time_str, font=f_handle)[2]
-    draw.text((W - PAD - tw, name_y + 4), time_str, font=f_handle, fill=GRAY)
+    # Time
+    t_str = str(random.randint(1, 22)) + "h"
+    tw    = draw.textbbox((0, 0), t_str, font=f_handle)[2]
+    draw.text((W - PAD - tw, ny + 6), t_str, font=f_handle, fill=GRAY)
+    draw.text((W - PAD - tw - 14, ny + 6), ".", font=f_handle, fill=GRAY)
 
-    # Separator line under header
+    # ── Divider ───────────────────────────────────────────────────
     sep_y = CAT_H + HEAD_H
     draw.line([(PAD, sep_y), (W - PAD, sep_y)], fill=BORDER, width=1)
 
     # ── Tweet text ────────────────────────────────────────────────
     ty = sep_y + 16
     for line in lines:
-        draw.text((PAD, ty), line, font=f_text, fill=TEXT_BLACK)
+        draw.text((PAD, ty), line, font=f_text, fill=BLACK)
         ty += line_h
 
-    # ── Stats / icons row ─────────────────────────────────────────
-    stats_y = TOTAL_H - STATS_H
-    draw.line([(PAD, stats_y), (W - PAD, stats_y)], fill=BORDER, width=1)
+    # ── Stats row ────────────────────────────────────────────────
+    st_y = TOTAL_H - STATS_H
+    draw.line([(PAD, st_y), (W - PAD, st_y)], fill=BORDER, width=1)
+    draw.rectangle([(0, st_y), (W, TOTAL_H)], fill=LGRAY)
+    draw.line([(PAD, st_y), (W - PAD, st_y)], fill=BORDER, width=1)
 
-    # Fake but plausible stats
-    replies  = str(random.randint(10, 999))
-    retweets = str(random.randint(50, 9999))
-    likes    = str(random.randint(100, 99999))
+    def fmt(n):
+        if n >= 1000000:
+            return str(round(n / 1000000, 1)) + "M"
+        if n >= 1000:
+            return str(round(n / 1000, 1)) + "K"
+        return str(n)
 
-    icons = [
-        ("💬", replies),
-        ("🔁", retweets),
-        ("❤️", likes),
-        ("📊", str(random.randint(1000, 500000))),
+    stats = [
+        ("Reply",    fmt(random.randint(10, 999))),
+        ("Retweet",  fmt(random.randint(50, 9999))),
+        ("Like",     fmt(random.randint(500, 99999))),
+        ("Views",    fmt(random.randint(5000, 999999))),
     ]
-
     sx = PAD
-    for icon, val in icons:
-        draw.text((sx, stats_y + 14), icon + " " + val, font=f_stats, fill=GRAY)
-        sx += 180
+    for label, val in stats:
+        draw.text((sx, st_y + 16), val + " " + label, font=f_stats, fill=GRAY)
+        sx += 190
 
-    # X watermark bottom right
-    draw.text((W - PAD - 16, stats_y + 14), "𝕏", font=f_stats, fill=LIGHT_GRAY)
+    # X watermark
+    xw = draw.textbbox((0, 0), "X", font=f_cat)[2]
+    draw.text((W - PAD - xw, st_y + 14), "X", font=f_cat, fill=BLUE)
 
     out = io.BytesIO()
     img.save(out, format="PNG", optimize=True)
@@ -308,7 +312,6 @@ async def post_tweet(bot, tweet, category):
         img = make_tweet_screenshot(tweet["text"], tweet["username"], category)
         for chat_id in CHAT_IDS:
             try:
-                # NO caption — just the image, like a real screenshot
                 await bot.send_photo(chat_id=chat_id, photo=img)
                 img.seek(0)
                 await asyncio.sleep(1)
@@ -316,8 +319,7 @@ async def post_tweet(bot, tweet, category):
                 log.error("Telegram error %s: %s", chat_id, e)
     except Exception as e:
         log.error("Image error: %s", e)
-        # Fallback: plain text only
-        fallback = tweet["text"][:300] + "\n\n— @" + tweet["username"]
+        fallback = tweet["text"][:300] + "\n\n-- @" + tweet["username"]
         for chat_id in CHAT_IDS:
             try:
                 await bot.send_message(chat_id=chat_id, text=fallback)
@@ -335,12 +337,12 @@ async def run_cycle(bot, seen_ids):
     posted = 0
     for category, accounts in CATEGORY_ACCOUNTS.items():
         account = random.choice(accounts)
-        tweets = fetch_rss(instance, account)
-        new_tweets = [t for t in tweets if t["id"] not in seen_ids]
-        if not new_tweets:
+        tweets  = fetch_rss(instance, account)
+        new     = [t for t in tweets if t["id"] not in seen_ids]
+        if not new:
             log.info("No new tweets from @%s", account)
             continue
-        tweet = random.choice(new_tweets)
+        tweet = random.choice(new)
         await post_tweet(bot, tweet, category)
         seen_ids.add(tweet["id"])
         save_seen_ids(seen_ids)
@@ -361,7 +363,7 @@ async def main():
         log.error("Missing env vars: %s", ", ".join(missing))
         return
 
-    bot = Bot(token=TELEGRAM_BOT_TOKEN)
+    bot      = Bot(token=TELEGRAM_BOT_TOKEN)
     seen_ids = load_seen_ids()
     log.info("Bot started. Posting every %ds", POST_INTERVAL)
 
