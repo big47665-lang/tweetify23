@@ -39,23 +39,23 @@ SEEN_IDS_FILE = Path("seen_tweet_ids.json")
 CATEGORY_ACCOUNTS = {
     "Funny": {
         "accounts": ["dril", "shitpost_2077", "funnytweeter", "gaming_leake"],
-        "emoji": "🟨🟨🟨",
+        "emoji": "🟨🟨🟨🟨🟨🟨",
     },
     "Political": {
         "accounts": ["Reuters", "AP", "politico", "axios"],
-        "emoji": "🔴🔴🔴",
+        "emoji": "🔴🔴🔴🔴🔴🔴",
     },
     "News": {
-        "accounts": ["BBCBreaking", "Reuters", "AP", "nytimes", "guardian"],
-        "emoji": "🔵🔵🔵",
+        "accounts": ["BBCBreaking", "Reuters", "ManotoNews", "nytimes", "guardian"],
+        "emoji": "🔵🔵🔵🔵🔵🔵",
     },
     "Gaming": {
-        "accounts": ["IGN", "PlayStation", "Xbox", "GameSpot", "Dexerto"],
-        "emoji": "🟣🟣🟣",
+        "accounts": ["IGN", "PlayStation", "Xbox", "GameSpot", "Dexerto", "InternetH0F"],
+        "emoji": "🟣🟣🟣🟣🟣🟣",
     },
     "Unhinged": {
         "accounts": ["dril", "", "TweetsByKosta", "insaneposes", "middleclassfancy", "LocalBateman"],
-        "emoji": "🟠🟠⚠️",
+        "emoji": "🟠🟠⚠️⚠️🟠🟠",
     },
 }
 
@@ -67,6 +67,9 @@ IRAN_ACCOUNTS = [
     "RFE_FARSI",
     "Realneo101",
     "thetwelfth_Imam",
+    "PahlaviReza",
+      "emoji": "☀☀🦁☀☀",
+    },
 ]
 
 # Accounts to AVOID (Iranian government)
