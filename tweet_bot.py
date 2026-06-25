@@ -83,12 +83,12 @@ HEADERS = {
 }
 
 TREND_KEYWORDS = [
-    "Ukraine",
-    "Palestine",
+    "PS5",
+    "XBOX",
     "Trump",
-    "Biden",
+    "",
     "China",
-    "Russia",
+    "",
     "AI",
     "Elon Musk",
     "SpaceX",
@@ -96,6 +96,9 @@ TREND_KEYWORDS = [
     "Iran",
     "Israel",
     "GTA VI",
+    "GTA 6",
+    "War",
+    
 ]
 
 IRAN_TRENDS = [
