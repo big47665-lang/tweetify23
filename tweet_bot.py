@@ -46,7 +46,7 @@ CATEGORY_ACCOUNTS = {
         "emoji": "🔴🔴🔴🔴🔴🔴",
     },
     "News": {
-        "accounts": ["BBCBreaking", "Reuters", "ManotoNews", "nytimes", "guardian"],
+        "accounts": ["BBCBreaking", "Reuters", "ManotoNews", "nytimes", "guardian", "DiscussingFilm"],
         "emoji": "🔵🔵🔵🔵🔵🔵",
     },
     "Gaming": {
@@ -68,6 +68,7 @@ IRAN_ACCOUNTS = [
     "Realneo101",
     "thetwelfth_Imam",
     "PahlaviReza",
+    "SAVAK071",
 ]
 
 # Accounts to AVOID (Iranian government)
