@@ -54,7 +54,7 @@ CATEGORY_ACCOUNTS = {
         "emoji": "🟣🟣🟣",
     },
     "Unhinged": {
-        "accounts": ["dril", "NotGaryBusey", "TweetsByKosta", "insaneposes", "middleclassfancy"],
+        "accounts": ["dril", "", "TweetsByKosta", "insaneposes", "middleclassfancy"],
         "emoji": "🟠🟠⚠️",
     },
 }
