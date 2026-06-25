@@ -54,7 +54,7 @@ CATEGORY_ACCOUNTS = {
         "emoji": "🟣🟣🟣",
     },
     "Unhinged": {
-        "accounts": ["dril", "", "TweetsByKosta", "insaneposes", "middleclassfancy"],
+        "accounts": ["dril", "", "TweetsByKosta", "insaneposes", "middleclassfancy", "LocalBateman"],
         "emoji": "🟠🟠⚠️",
     },
 }
@@ -63,7 +63,7 @@ IRAN_ACCOUNTS = [
     "IranIntl_Fa",
     "BhFak46419",
     "MatinSenPai",
-    "manototv",
+    "",
     "RFE_FARSI",
     "Realneo101",
     "thetwelfth_Imam",
@@ -95,15 +95,17 @@ TREND_KEYWORDS = [
     "Tesla",
     "Iran",
     "Israel",
+    "GTA VI",
 ]
 
 IRAN_TRENDS = [
     "ایران",
-    "انتخابات",
+    "خامنه ای",
     "دولت",
     "سیاست",
     "خبر",
     "اقتصاد",
+    "جاوید شاه",
 ]
 
 
