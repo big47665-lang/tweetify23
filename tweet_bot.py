@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 """
-Tweet Sharing Bot - Enhanced Version
-- Emoji indicators per category
-- Media downloading (photos/videos)
-- Trending topics + News section
-- Iran timeline with filtering
-- Posted via @Tweet1fy_bot
+Tweet Sharing Bot - Clean Edition
+- Clean text (no blue sections)
+- Translation buttons (EN/FA)
+- Photos with text in caption
 """
 
 import os
@@ -19,8 +17,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 import requests
 import xml.etree.ElementTree as ET
-from telegram import Bot
+from telegram import Bot, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.error import TelegramError
+from googletrans import Translator
 
 logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s", level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -38,40 +37,35 @@ SEEN_IDS_FILE = Path("seen_tweet_ids.json")
 
 CATEGORY_ACCOUNTS = {
     "Funny": {
-        "accounts": ["dril", "shitpost_2077", "funnytweeter", "gaming_leake"],
-        "emoji": "🟨🟨🟨🟨🟨🟨",
+        "accounts": ["dril", "dadsaysjokes", "funnytweeter", "thedad"],
+        "emoji": "🟨🟨🟨",
     },
     "Political": {
         "accounts": ["Reuters", "AP", "politico", "axios"],
-        "emoji": "🔴🔴🔴🔴🔴🔴",
+        "emoji": "🔴🔴🔴",
     },
     "News": {
-        "accounts": ["BBCBreaking", "Reuters", "ManotoNews", "nytimes", "guardian", "DiscussingFilm"],
-        "emoji": "🔵🔵🔵🔵🔵🔵",
+        "accounts": ["BBCBreaking", "Reuters", "AP", "nytimes"],
+        "emoji": "🔵🔵🔵",
     },
     "Gaming": {
-        "accounts": ["IGN", "PlayStation", "Xbox", "GameSpot", "Dexerto", "InternetH0F"],
-        "emoji": "🟣🟣🟣🟣🟣🟣",
+        "accounts": ["IGN", "PlayStation", "Xbox", "GameSpot"],
+        "emoji": "🟣🟣🟣",
     },
     "Unhinged": {
-        "accounts": ["dril", "", "TweetsByKosta", "insaneposes", "middleclassfancy", "LocalBateman"],
-        "emoji": "🟠🟠⚠️⚠️🟠🟠",
+        "accounts": ["dril", "NotGaryBusey", "TweetsByKosta"],
+        "emoji": "🟠🟠⚠️",
     },
 }
 
 IRAN_ACCOUNTS = [
     "IranIntl_Fa",
-    "BhFak46419",
-    "MatinSenPai",
-    "",
+    "bbcpersian",
+    "VOAIran",
+    "manototv",
     "RFE_FARSI",
-    "Realneo101",
-    "thetwelfth_Imam",
-    "PahlaviReza",
-    "SAVAK071",
 ]
 
-# Accounts to AVOID (Iranian government)
 BLOCKED_KEYWORDS = ["Islamic Republic", "gov.ir", "khamenei", "rouhani", "Revolutionary Guard"]
 
 NITTER_INSTANCES = [
@@ -85,33 +79,21 @@ HEADERS = {
 }
 
 TREND_KEYWORDS = [
-    "PS5",
-    "XBOX",
+    "Ukraine",
+    "Palestine",
     "Trump",
-    "",
+    "Biden",
     "China",
-    "",
+    "Russia",
     "AI",
     "Elon Musk",
     "SpaceX",
     "Tesla",
     "Iran",
     "Israel",
-    "GTA VI",
-    "GTA 6",
-    "War",
-    
 ]
 
-IRAN_TRENDS = [
-    "ایران",
-    "خامنه ای",
-    "دولت",
-    "سیاست",
-    "خبر",
-    "اقتصاد",
-    "جاوید شاه",
-]
+translator = Translator()
 
 
 def load_seen_ids():
@@ -122,6 +104,30 @@ def load_seen_ids():
 
 def save_seen_ids(ids):
     SEEN_IDS_FILE.write_text(json.dumps(list(ids)[-10000:]))
+
+
+def clean_text(text):
+    """Remove HTML, extra whitespace, links"""
+    # Remove HTML tags
+    text = re.sub(r"<[^>]+>", "", text)
+    # Remove extra whitespace
+    text = re.sub(r"\s+", " ", text).strip()
+    # Remove URLs
+    text = re.sub(r"http[s]?://\S+", "", text).strip()
+    return text
+
+
+def translate_text(text, lang):
+    """Translate text to Persian or English"""
+    try:
+        if lang == "fa":
+            result = translator.translate(text, src_language="en", dest_language="fa")
+        else:
+            result = translator.translate(text, src_language="fa", dest_language="en")
+        return result.text
+    except Exception as e:
+        log.warning("Translation error: %s", e)
+        return text
 
 
 def get_working_instance():
@@ -153,21 +159,20 @@ def fetch_rss(instance, username):
             desc = item.findtext("description", "").strip()
             guid = item.findtext("guid", link).strip()
             
-            clean = re.sub(r"<[^>]+>", "", desc).strip()
-            text = clean if clean else title
-            if not text or len(text) < 5:
+            clean = clean_text(desc) or title
+            if not clean or len(clean) < 5:
                 continue
             
             tweet_id = link.rstrip("/").split("/")[-1].replace("#m", "")
             
-            # Extract media URLs from HTML
+            # Extract media
             media_urls = []
-            soup_match = re.findall(r'<a href="([^"]*\.(?:jpg|jpeg|png|mp4|webm))"', desc)
+            soup_match = re.findall(r'src="([^"]*\.(?:jpg|jpeg|png|mp4|webm))"', desc)
             media_urls.extend(soup_match)
             
             tweets.append({
                 "id": tweet_id if tweet_id.isdigit() else guid,
-                "text": text[:400],
+                "text": clean[:400],
                 "username": username,
                 "url": "https://twitter.com/" + username,
                 "media": media_urls,
@@ -187,14 +192,14 @@ def search_trending(instance, keyword):
         if resp.status_code != 200:
             return []
         
-        # Parse simple HTML (Nitter format)
         tweets = []
+        # Extract text and usernames from Nitter HTML
         text_blocks = re.findall(r'<div class="tweet-content">([^<]+)</div>', resp.text)
         username_blocks = re.findall(r'<a class="username">(@\w+)</a>', resp.text)
         
-        for i, text in enumerate(text_blocks[:5]):  # Limit to 5 per keyword
+        for i, text in enumerate(text_blocks[:5]):
             username = username_blocks[i].replace("@", "") if i < len(username_blocks) else "unknown"
-            clean = re.sub(r"<[^>]+>", "", text).strip()
+            clean = clean_text(text)
             tweets.append({
                 "text": clean[:350],
                 "username": username,
@@ -206,7 +211,7 @@ def search_trending(instance, keyword):
 
 
 def download_media(url):
-    """Download media file and return bytes"""
+    """Download media file"""
     try:
         resp = requests.get(url, headers=HEADERS, timeout=15)
         if resp.status_code == 200:
@@ -216,12 +221,29 @@ def download_media(url):
     return None
 
 
+def get_translation_buttons(tweet_text):
+    """Create translation buttons"""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🇬🇧 English", callback_data=f"translate_en:{tweet_text[:20]}"),
+            InlineKeyboardButton("🇮🇷 فارسی", callback_data=f"translate_fa:{tweet_text[:20]}"),
+        ]
+    ])
+
+
 async def send_tweet_text(bot, tweet, emoji_prefix):
-    """Send tweet as text with emoji prefix"""
+    """Send tweet as text with translation buttons"""
     text = emoji_prefix + "\n\n" + tweet["text"] + "\n\n@" + tweet["username"] + "\n— @Tweet1fy_bot"
+    
+    keyboard = get_translation_buttons(tweet["text"])
+    
     for chat_id in CHAT_IDS:
         try:
-            await bot.send_message(chat_id=chat_id, text=text)
+            await bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                reply_markup=keyboard,
+            )
             await asyncio.sleep(1)
         except TelegramError as e:
             log.error("Telegram error %s: %s", chat_id, e)
@@ -236,15 +258,25 @@ async def send_tweet_media(bot, tweet, emoji_prefix, media_url):
         await send_tweet_text(bot, tweet, emoji_prefix)
         return
     
-    # Determine if photo or video
     is_video = media_url.lower().endswith((".mp4", ".webm"))
+    keyboard = get_translation_buttons(tweet["text"])
     
     for chat_id in CHAT_IDS:
         try:
             if is_video:
-                await bot.send_video(chat_id=chat_id, video=media_bytes, caption=caption)
+                await bot.send_video(
+                    chat_id=chat_id,
+                    video=media_bytes,
+                    caption=caption,
+                    reply_markup=keyboard,
+                )
             else:
-                await bot.send_photo(chat_id=chat_id, photo=media_bytes, caption=caption)
+                await bot.send_photo(
+                    chat_id=chat_id,
+                    photo=media_bytes,
+                    caption=caption,
+                    reply_markup=keyboard,
+                )
             media_bytes.seek(0)
             await asyncio.sleep(1)
         except TelegramError as e:
@@ -287,20 +319,18 @@ async def run_category_cycle(bot, seen_ids):
 
 
 async def run_news_cycle(bot, seen_ids):
-    """Post trending news - top 3 trends with 2 tweets each"""
+    """Post trending news"""
     log.info("=== News cycle started ===")
     instance = get_working_instance()
     if not instance:
         return
 
-    # Get 3 random trending keywords
     trends = random.sample(TREND_KEYWORDS, min(3, len(TREND_KEYWORDS)))
     
     for trend in trends:
         log.info("Searching for trend: %s", trend)
         tweets = search_trending(instance, trend)
         
-        # Take 2 tweets per trend
         for i, tweet in enumerate(tweets[:2]):
             if i >= 2:
                 break
@@ -323,7 +353,7 @@ async def run_news_cycle(bot, seen_ids):
 
 
 async def run_iran_cycle(bot, seen_ids):
-    """Post Iran-specific trends"""
+    """Post Iran-specific content"""
     log.info("=== Iran cycle started ===")
     instance = get_working_instance()
     if not instance:
@@ -337,7 +367,7 @@ async def run_iran_cycle(bot, seen_ids):
         log.info("No new Iran tweets")
         return
     
-    # Filter out government accounts
+    # Filter government accounts
     filtered = []
     for tweet in new:
         skip = False
@@ -377,7 +407,7 @@ async def main():
 
     bot = Bot(token=TELEGRAM_BOT_TOKEN)
     seen_ids = load_seen_ids()
-    log.info("Bot started with enhanced features")
+    log.info("Bot started - Clean edition with translations")
 
     category_timer = 0
     news_timer = 0
@@ -385,22 +415,18 @@ async def main():
 
     while True:
         try:
-            # Category posts every POST_INTERVAL
             if category_timer <= 0:
                 await run_category_cycle(bot, seen_ids)
                 category_timer = POST_INTERVAL
             
-            # News every NEWS_INTERVAL
             if news_timer <= 0:
                 await run_news_cycle(bot, seen_ids)
                 news_timer = NEWS_INTERVAL
             
-            # Iran every 10 minutes
             if iran_timer <= 0:
                 await run_iran_cycle(bot, seen_ids)
                 iran_timer = 600
 
-            # Sleep for 60 seconds then check timers
             await asyncio.sleep(60)
             category_timer -= 60
             news_timer -= 60
