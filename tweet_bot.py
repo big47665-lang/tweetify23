@@ -68,8 +68,6 @@ IRAN_ACCOUNTS = [
     "Realneo101",
     "thetwelfth_Imam",
     "PahlaviReza",
-      "emoji": "☀☀🦁☀☀",
-    },
 ]
 
 # Accounts to AVOID (Iranian government)
