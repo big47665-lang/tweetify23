@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Tweet Sharing Bot - Clean Edition
-- Clean text (no blue sections)
-- Translation buttons (EN/FA)
-- Photos with text in caption
+Tweet Sharing Bot - Retweet Edition
+- Iran emoji: ☀️☀️🦁☀️☀️
+- Retweet formatting with separators
+- Media with full text in caption
 """
 
 import os
@@ -66,6 +66,8 @@ IRAN_ACCOUNTS = [
     "RFE_FARSI",
 ]
 
+IRAN_EMOJI = "☀️☀️🦁☀️☀️"
+
 BLOCKED_KEYWORDS = ["Islamic Republic", "gov.ir", "khamenei", "rouhani", "Revolutionary Guard"]
 
 NITTER_INSTANCES = [
@@ -108,26 +110,69 @@ def save_seen_ids(ids):
 
 def clean_text(text):
     """Remove HTML, extra whitespace, links"""
-    # Remove HTML tags
     text = re.sub(r"<[^>]+>", "", text)
-    # Remove extra whitespace
     text = re.sub(r"\s+", " ", text).strip()
-    # Remove URLs
     text = re.sub(r"http[s]?://\S+", "", text).strip()
     return text
 
 
-def translate_text(text, lang):
-    """Translate text to Persian or English"""
-    try:
-        if lang == "fa":
-            result = translator.translate(text, src_language="en", dest_language="fa")
-        else:
-            result = translator.translate(text, src_language="fa", dest_language="en")
-        return result.text
-    except Exception as e:
-        log.warning("Translation error: %s", e)
-        return text
+def detect_retweet(text):
+    """
+    Detect if tweet is a retweet
+    Returns: (is_retweet, retweeter_username, original_text, original_username)
+    """
+    # Pattern: RT @username: text
+    match = re.match(r'RT @(\w+):\s*(.*)', text)
+    if match:
+        retweeter = match.group(1)
+        rest = match.group(2)
+        
+        # Try to find if there's original user mentioned
+        original_match = re.search(r'@(\w+)', rest)
+        if original_match:
+            original_user = original_match.group(1)
+            original_text = rest
+            return True, retweeter, original_text, original_user
+        
+        return True, retweeter, rest, "unknown"
+    
+    return False, None, text, None
+
+
+def format_retweet(retweeter, original_user, original_text, emoji_prefix):
+    """Format retweet with separator"""
+    separator = "~~~~~~~~~~~~~~~~~~~~~~~~"
+    
+    formatted = (
+        emoji_prefix + "\n\n"
+        "🔄 Retweeted by @" + retweeter + "\n\n"
+        + separator + "\n\n"
+        "@" + original_user + ":\n\n"
+        + original_text + "\n\n"
+        "— @Tweet1fy_bot"
+    )
+    return formatted
+
+
+def format_normal_tweet(text, username, emoji_prefix):
+    """Format normal tweet"""
+    return (
+        emoji_prefix + "\n\n"
+        + text + "\n\n"
+        "@" + username + "\n"
+        "— @Tweet1fy_bot"
+    )
+
+
+def get_translation_buttons(tweet_text):
+    """Create translation buttons"""
+    short = tweet_text[:20]
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🇬🇧 English", callback_data=f"translate_en:{short}"),
+            InlineKeyboardButton("🇮🇷 فارسی", callback_data=f"translate_fa:{short}"),
+        ]
+    ])
 
 
 def get_working_instance():
@@ -193,7 +238,6 @@ def search_trending(instance, keyword):
             return []
         
         tweets = []
-        # Extract text and usernames from Nitter HTML
         text_blocks = re.findall(r'<div class="tweet-content">([^<]+)</div>', resp.text)
         username_blocks = re.findall(r'<a class="username">(@\w+)</a>', resp.text)
         
@@ -221,19 +265,15 @@ def download_media(url):
     return None
 
 
-def get_translation_buttons(tweet_text):
-    """Create translation buttons"""
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("🇬🇧 English", callback_data=f"translate_en:{tweet_text[:20]}"),
-            InlineKeyboardButton("🇮🇷 فارسی", callback_data=f"translate_fa:{tweet_text[:20]}"),
-        ]
-    ])
-
-
 async def send_tweet_text(bot, tweet, emoji_prefix):
     """Send tweet as text with translation buttons"""
-    text = emoji_prefix + "\n\n" + tweet["text"] + "\n\n@" + tweet["username"] + "\n— @Tweet1fy_bot"
+    # Check if it's a retweet
+    is_rt, retweeter, original_text, original_user = detect_retweet(tweet["text"])
+    
+    if is_rt:
+        text = format_retweet(retweeter, original_user, original_text, emoji_prefix)
+    else:
+        text = format_normal_tweet(tweet["text"], tweet["username"], emoji_prefix)
     
     keyboard = get_translation_buttons(tweet["text"])
     
@@ -251,7 +291,13 @@ async def send_tweet_text(bot, tweet, emoji_prefix):
 
 async def send_tweet_media(bot, tweet, emoji_prefix, media_url):
     """Send tweet with media (photo/video) and text in caption"""
-    caption = emoji_prefix + "\n\n" + tweet["text"] + "\n\n@" + tweet["username"] + "\n— @Tweet1fy_bot"
+    # Check if it's a retweet
+    is_rt, retweeter, original_text, original_user = detect_retweet(tweet["text"])
+    
+    if is_rt:
+        caption = format_retweet(retweeter, original_user, original_text, emoji_prefix)
+    else:
+        caption = format_normal_tweet(tweet["text"], tweet["username"], emoji_prefix)
     
     media_bytes = download_media(media_url)
     if not media_bytes:
@@ -383,7 +429,7 @@ async def run_iran_cycle(bot, seen_ids):
         return
     
     tweet = random.choice(filtered)
-    emoji = "🇮🇷🇮🇷🇮🇷"
+    emoji = IRAN_EMOJI  # ☀️☀️🦁☀️☀️
     
     if tweet.get("media"):
         await send_tweet_media(bot, tweet, emoji, tweet["media"][0])
@@ -407,7 +453,7 @@ async def main():
 
     bot = Bot(token=TELEGRAM_BOT_TOKEN)
     seen_ids = load_seen_ids()
-    log.info("Bot started - Clean edition with translations")
+    log.info("Bot started - Retweet edition with Iran emojis")
 
     category_timer = 0
     news_timer = 0
