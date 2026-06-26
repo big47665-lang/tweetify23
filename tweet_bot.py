@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Tweet Sharing Bot - Retweet Edition
-- Iran emoji: ☀️☀️🦁☀️☀️
-- Retweet formatting with separators
-- Media with full text in caption
+Tweet Sharing Bot - Final Version
+- 12-hour tweet filtering
+- Fallback to Persian/trending if nothing new
+- Custom accounts (user-edited, kept across updates)
 """
 
 import os
@@ -13,7 +13,7 @@ import random
 import asyncio
 import re
 import io
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import requests
 import xml.etree.ElementTree as ET
@@ -30,42 +30,38 @@ CHAT_IDS = [c.strip() for c in RAW_CHAT_IDS.split(",") if c.strip()]
 POST_INTERVAL = int(os.environ.get("POST_INTERVAL_SECONDS", 600))
 NEWS_INTERVAL = int(os.environ.get("NEWS_INTERVAL_SECONDS", 900))
 SEEN_IDS_FILE = Path("seen_tweet_ids.json")
+TWEET_AGE_HOURS = 12  # Only fetch tweets from last 12 hours
 
 # ═══════════════════════════════════════════════════════════════
-#   CUSTOMIZE YOUR ACCOUNTS HERE
+#   CUSTOMIZE YOUR ACCOUNTS HERE (KEPT ACROSS UPDATES)
 # ═══════════════════════════════════════════════════════════════
 
 CATEGORY_ACCOUNTS = {
-    "Funny": {  
-        "accounts": ["dril", "shitpost_2077", "funnytweeter", "gaming_leake"],  
-        "emoji": "🟨🟨🟨🟨🟨🟨",
+    "Funny": {
+        "accounts": ["dril", "shitpost_2077", "funnytweeter", "gaming_leake"],
+        "emoji": "😂😂😂",
     },
-    "Political": {  
-        "accounts": ["Reuters", "AP", "politico", "axios"],  
-        "emoji": "🔴🔴🔴🔴🔴🔴",
+    "Political": {
+        "accounts": ["Reuters", "AP", "politico", "axios"],
+        "emoji": "🏛️🏛️🏛️",
     },
-    "News": {  
-        "accounts": ["BBCBreaking", "Reuters", "ManotoNews", "nytimes", "guardian", "DiscussingFilm"],  
-        "emoji": "🔵🔵🔵🔵🔵🔵",
+    "News": {
+        "accounts": ["BBCBreaking", "Reuters", "ManotoNews", "nytimes", "guardian", "DiscussingFilm"],
+        "emoji": "📰📰📰",
     },
-    "Gaming": {  
-        "accounts": ["IGN", "PlayStation", "Xbox", "GameSpot", "Dexerto", "InternetH0F"],  
-        "emoji": "🟣🟣🟣🟣🟣🟣",
+    "Gaming": {
+        "accounts": ["IGN", "PlayStation", "Xbox", "GameSpot", "Dexerto", "InternetH0F"],
+        "emoji": "🎮🎮🎮",
     },
-    "Unhinged": {  
-        "accounts": ["dril", "", "TweetsByKosta", "insaneposes", "middleclassfancy", "LocalBateman"],  
-        "emoji": "🟠🟠⚠️⚠️🟠🟠",
+    "Unhinged": {
+        "accounts": ["dril", "TweetsByKosta", "insaneposes", "middleclassfancy", "LocalBateman"],
+        "emoji": "🤪🤪🤪",
     },
 }
 
 IRAN_ACCOUNTS = [
-    "IranIntl_Fa",
-    "MatinSenPai",
-    "BhFak46419",
-    "Realneo101",
-    "thetwelfth_Imam",
-    "PahlaviReza",
-    "SAVAK071",
+    "IranIntl_Fa", "BhFak46419", "MatinSenPai", "RFE_FARSI", 
+    "Realneo101", "thetwelfth_Imam", "PahlaviReza", "SAVAK071",
 ]
 
 IRAN_EMOJI = "☀️☀️🦁☀️☀️"
@@ -83,32 +79,16 @@ HEADERS = {
 }
 
 TREND_KEYWORDS = [
-    "PS5",
-    "XBOX",
-    "Trump",
-    "GTA VI",
-    "War",
-    "GTA 6",
-    "AI",
-    "Elon Musk",
-    "SpaceX",
-    "Tesla",
-    "Iran",
-    "Israel",
+    "PS5", "XBOX", "Trump", "China", "AI", "Elon Musk", 
+    "SpaceX", "Tesla", "Iran", "Israel", "GTA VI", "GTA 6", "War",
 ]
 
 IRAN_TRENDS = [
-    "ایران",
-    "خامنه ای",
-    "دولت",
-    "سیاست",
-    "خبر",
-    "اقتصاد",
-    "جاوید شاه",
-    "ذرت",
-    "عرزشی",
-    "کتلت",
+    "ایران", "خامنه ای", "دولت", "سیاست", "خبر", "اقتصاد", "جاوید شاه",
 ]
+
+# ═══════════════════════════════════════════════════════════════
+
 
 def load_seen_ids():
     if SEEN_IDS_FILE.exists():
@@ -129,72 +109,53 @@ def clean_text(text):
 
 
 def translate_to_persian(text):
-    """Translate English text to Persian using free API"""
+    """Translate English text to Persian"""
     try:
-        # Using MyMemory Translation API (free, no key needed)
         url = "https://api.mymemory.translated.net/get"
-        params = {
-            "q": text[:500],  # API limit
-            "langpair": "en|fa"
-        }
+        params = {"q": text[:500], "langpair": "en|fa"}
         resp = requests.get(url, params=params, timeout=8)
         if resp.status_code == 200:
             data = resp.json()
             if data.get("responseStatus") == 200:
-                translated = data["responseData"]["translatedText"]
-                return translated if translated else text
+                return data["responseData"]["translatedText"] or text
     except Exception as e:
         log.warning("Translation to Persian failed: %s", e)
     return text
 
 
 def translate_to_english(text):
-    """Translate Persian text to English using free API"""
+    """Translate Persian text to English"""
     try:
         url = "https://api.mymemory.translated.net/get"
-        params = {
-            "q": text[:500],
-            "langpair": "fa|en"
-        }
+        params = {"q": text[:500], "langpair": "fa|en"}
         resp = requests.get(url, params=params, timeout=8)
         if resp.status_code == 200:
             data = resp.json()
             if data.get("responseStatus") == 200:
-                translated = data["responseData"]["translatedText"]
-                return translated if translated else text
+                return data["responseData"]["translatedText"] or text
     except Exception as e:
         log.warning("Translation to English failed: %s", e)
     return text
 
 
 def detect_retweet(text):
-    """
-    Detect if tweet is a retweet
-    Returns: (is_retweet, retweeter_username, original_text, original_username)
-    """
-    # Pattern: RT @username: text
+    """Detect if tweet is a retweet"""
     match = re.match(r'RT @(\w+):\s*(.*)', text)
     if match:
         retweeter = match.group(1)
         rest = match.group(2)
-        
-        # Try to find if there's original user mentioned
         original_match = re.search(r'@(\w+)', rest)
         if original_match:
             original_user = original_match.group(1)
-            original_text = rest
-            return True, retweeter, original_text, original_user
-        
+            return True, retweeter, rest, original_user
         return True, retweeter, rest, "unknown"
-    
     return False, None, text, None
 
 
 def format_retweet(retweeter, original_user, original_text, emoji_prefix):
-    """Format retweet with separator"""
+    """Format retweet"""
     separator = "~~~~~~~~~~~~~~~~~~~~~~~~"
-    
-    formatted = (
+    return (
         emoji_prefix + "\n\n"
         "🔄 Retweeted by @" + retweeter + "\n\n"
         + separator + "\n\n"
@@ -202,7 +163,6 @@ def format_retweet(retweeter, original_user, original_text, emoji_prefix):
         + original_text + "\n\n"
         "— @Tweet1fy_bot"
     )
-    return formatted
 
 
 def format_normal_tweet(text, username, emoji_prefix):
@@ -226,6 +186,48 @@ def get_translation_buttons(tweet_text):
     ])
 
 
+async def handle_translation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle translation button clicks"""
+    query = update.callback_query
+    
+    try:
+        await query.answer(text="Translating...", show_alert=False)
+        
+        data = query.data
+        original_text = query.message.text
+        
+        # Extract tweet text
+        lines = original_text.split("\n")
+        tweet_text = ""
+        for line in lines:
+            if line and not line.startswith("—") and not line.startswith("@") and not line.startswith("🔄"):
+                if not any(c in line for c in ["~~~~", "----"]):
+                    tweet_text += line + " "
+        tweet_text = tweet_text.strip()[:300]
+        
+        if not tweet_text:
+            await query.answer(text="No text to translate", show_alert=True)
+            return
+        
+        response = ""
+        
+        if "translate_fa" in data:
+            translated = translate_to_persian(tweet_text)
+            response = "\n\n🇮🇷 *فارسی ترجمه:*\n\n" + translated
+        elif "translate_en" in data:
+            translated = translate_to_english(tweet_text)
+            response = "\n\n🇬🇧 *English Translation:*\n\n" + translated
+        
+        if response:
+            new_text = original_text + response
+            await query.edit_message_text(text=new_text)
+            await query.answer(text="Done!", show_alert=False)
+    
+    except Exception as e:
+        log.error("Translation error: %s", e)
+        await query.answer(text="Failed: " + str(e)[:50], show_alert=True)
+
+
 def get_working_instance():
     instances = NITTER_INSTANCES.copy()
     random.shuffle(instances)
@@ -241,19 +243,32 @@ def get_working_instance():
 
 
 def fetch_rss(instance, username):
+    """Fetch RSS and filter by age (last 12 hours)"""
     url = instance + "/" + username + "/rss"
     try:
         resp = requests.get(url, headers=HEADERS, timeout=10)
         if resp.status_code != 200:
             return []
+        
         root = ET.fromstring(resp.content)
         items = root.findall(".//item")
         tweets = []
+        cutoff_time = datetime.now(timezone.utc) - timedelta(hours=TWEET_AGE_HOURS)
+        
         for item in items:
             title = item.findtext("title", "").strip()
             link = item.findtext("link", "").strip()
             desc = item.findtext("description", "").strip()
             guid = item.findtext("guid", link).strip()
+            pub_date_str = item.findtext("pubDate", "").strip()
+            
+            # Parse publish date
+            try:
+                pub_date = datetime.fromisoformat(pub_date_str.replace("Z", "+00:00"))
+                if pub_date < cutoff_time:
+                    continue  # Skip tweets older than 12 hours
+            except Exception:
+                pass  # If can't parse, include it anyway
             
             clean = clean_text(desc) or title
             if not clean or len(clean) < 5:
@@ -273,15 +288,30 @@ def fetch_rss(instance, username):
                 "url": "https://twitter.com/" + username,
                 "media": media_urls,
             })
-        log.info("Got %d tweets from @%s", len(tweets), username)
+        
+        log.info("Got %d tweets from @%s (last %dh)", len(tweets), username, TWEET_AGE_HOURS)
         return tweets
     except Exception as e:
         log.warning("RSS error for @%s: %s", username, e)
         return []
 
 
+def download_media(url):
+    """Download media - skip if too small"""
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=15)
+        if resp.status_code == 200:
+            if len(resp.content) > 102400:
+                return io.BytesIO(resp.content)
+            elif url.lower().endswith((".jpg", ".jpeg", ".png")):
+                return io.BytesIO(resp.content)
+    except Exception as e:
+        log.warning("Media download failed: %s", e)
+    return None
+
+
 def search_trending(instance, keyword):
-    """Search for trending topic tweets"""
+    """Search for trending tweets"""
     search_url = instance + "/search?q=" + requests.utils.quote(keyword) + "&f=tweets"
     try:
         resp = requests.get(search_url, headers=HEADERS, timeout=12)
@@ -305,25 +335,8 @@ def search_trending(instance, keyword):
         return []
 
 
-def download_media(url):
-    """Download media file - skip if it's too small (likely thumbnail)"""
-    try:
-        resp = requests.get(url, headers=HEADERS, timeout=15)
-        if resp.status_code == 200:
-            # Check file size - if < 100KB, it's probably just a thumbnail
-            if len(resp.content) > 102400:  # 100KB minimum for real video
-                return io.BytesIO(resp.content)
-            elif url.lower().endswith((".jpg", ".jpeg", ".png")):
-                # Images are OK to be small
-                return io.BytesIO(resp.content)
-    except Exception as e:
-        log.warning("Media download failed: %s", e)
-    return None
-
-
 async def send_tweet_text(bot, tweet, emoji_prefix):
-    """Send tweet as text with translation buttons"""
-    # Check if it's a retweet
+    """Send tweet as text"""
     is_rt, retweeter, original_text, original_user = detect_retweet(tweet["text"])
     
     if is_rt:
@@ -335,19 +348,14 @@ async def send_tweet_text(bot, tweet, emoji_prefix):
     
     for chat_id in CHAT_IDS:
         try:
-            await bot.send_message(
-                chat_id=chat_id,
-                text=text,
-                reply_markup=keyboard,
-            )
+            await bot.send_message(chat_id=chat_id, text=text, reply_markup=keyboard)
             await asyncio.sleep(1)
         except TelegramError as e:
             log.error("Telegram error %s: %s", chat_id, e)
 
 
 async def send_tweet_media(bot, tweet, emoji_prefix, media_url):
-    """Send tweet with media (photo/video) and text in caption"""
-    # Check if it's a retweet
+    """Send tweet with media"""
     is_rt, retweeter, original_text, original_user = detect_retweet(tweet["text"])
     
     if is_rt:
@@ -366,19 +374,9 @@ async def send_tweet_media(bot, tweet, emoji_prefix, media_url):
     for chat_id in CHAT_IDS:
         try:
             if is_video:
-                await bot.send_video(
-                    chat_id=chat_id,
-                    video=media_bytes,
-                    caption=caption,
-                    reply_markup=keyboard,
-                )
+                await bot.send_video(chat_id=chat_id, video=media_bytes, caption=caption, reply_markup=keyboard)
             else:
-                await bot.send_photo(
-                    chat_id=chat_id,
-                    photo=media_bytes,
-                    caption=caption,
-                    reply_markup=keyboard,
-                )
+                await bot.send_photo(chat_id=chat_id, photo=media_bytes, caption=caption, reply_markup=keyboard)
             media_bytes.seek(0)
             await asyncio.sleep(1)
         except TelegramError as e:
@@ -386,11 +384,10 @@ async def send_tweet_media(bot, tweet, emoji_prefix, media_url):
 
 
 async def run_category_cycle(bot, seen_ids):
-    """Post from category accounts"""
+    """Post from categories"""
     log.info("=== Category cycle started ===")
     instance = get_working_instance()
     if not instance:
-        log.error("No Nitter instance!")
         return
 
     posted = 0
@@ -400,7 +397,7 @@ async def run_category_cycle(bot, seen_ids):
         new = [t for t in tweets if t["id"] not in seen_ids]
         
         if not new:
-            log.info("No new tweets from @%s", account)
+            log.info("No new tweets from @%s (last %dh)", account, TWEET_AGE_HOURS)
             continue
         
         tweet = random.choice(new)
@@ -421,7 +418,7 @@ async def run_category_cycle(bot, seen_ids):
 
 
 async def run_news_cycle(bot, seen_ids):
-    """Post trending news"""
+    """Post news - trending topics"""
     log.info("=== News cycle started ===")
     instance = get_working_instance()
     if not instance:
@@ -430,7 +427,6 @@ async def run_news_cycle(bot, seen_ids):
     trends = random.sample(TREND_KEYWORDS, min(3, len(TREND_KEYWORDS)))
     
     for trend in trends:
-        log.info("Searching for trend: %s", trend)
         tweets = search_trending(instance, trend)
         
         for i, tweet in enumerate(tweets[:2]):
@@ -455,7 +451,7 @@ async def run_news_cycle(bot, seen_ids):
 
 
 async def run_iran_cycle(bot, seen_ids):
-    """Post Iran-specific content"""
+    """Post Iran content"""
     log.info("=== Iran cycle started ===")
     instance = get_working_instance()
     if not instance:
@@ -469,7 +465,6 @@ async def run_iran_cycle(bot, seen_ids):
         log.info("No new Iran tweets")
         return
     
-    # Filter government accounts
     filtered = []
     for tweet in new:
         skip = False
@@ -481,11 +476,10 @@ async def run_iran_cycle(bot, seen_ids):
             filtered.append(tweet)
     
     if not filtered:
-        log.info("All Iran tweets from blocked accounts")
         return
     
     tweet = random.choice(filtered)
-    emoji = IRAN_EMOJI  # ☀️☀️🦁☀️☀️
+    emoji = IRAN_EMOJI
     
     if tweet.get("media"):
         await send_tweet_media(bot, tweet, emoji, tweet["media"][0])
@@ -497,55 +491,8 @@ async def run_iran_cycle(bot, seen_ids):
     log.info("Posted Iran tweet from @%s", account)
 
 
-async def handle_translation(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle translation button clicks"""
-    query = update.callback_query
-    
-    try:
-        await query.answer(text="Translating...", show_alert=False)
-        
-        data = query.data
-        original_text = query.message.text
-        
-        # Extract tweet text (skip emojis, signatures, etc)
-        lines = original_text.split("\n")
-        tweet_text = ""
-        for line in lines:
-            if line and not line.startswith("—") and not line.startswith("@") and not line.startswith("🔄"):
-                if not any(c in line for c in ["~~~~", "----"]):
-                    tweet_text += line + " "
-        tweet_text = tweet_text.strip()[:300]
-        
-        if not tweet_text:
-            await query.answer(text="No text to translate", show_alert=True)
-            return
-        
-        response = ""
-        
-        if "translate_fa" in data:
-            # Translate to Persian
-            log.info("Translating to Persian: %s", tweet_text[:50])
-            translated = translate_to_persian(tweet_text)
-            response = "\n\n🇮🇷 *فارسی ترجمه:*\n\n" + translated
-            
-        elif "translate_en" in data:
-            # Translate to English
-            log.info("Translating to English: %s", tweet_text[:50])
-            translated = translate_to_english(tweet_text)
-            response = "\n\n🇬🇧 *English Translation:*\n\n" + translated
-        
-        if response:
-            new_text = original_text + response
-            await query.edit_message_text(text=new_text)
-            await query.answer(text="Done!", show_alert=False)
-    
-    except Exception as e:
-        log.error("Translation callback error: %s", e)
-        await query.answer(text="Translation failed: " + str(e)[:50], show_alert=True)
-
-
 async def run_posting_cycle(bot, seen_ids):
-    """Run the posting cycle in background"""
+    """Run posting cycle"""
     category_timer = 0
     news_timer = 0
     iran_timer = 0
@@ -570,7 +517,7 @@ async def run_posting_cycle(bot, seen_ids):
             iran_timer -= 60
 
         except Exception as e:
-            log.exception("Posting cycle error: %s", e)
+            log.exception("Posting error: %s", e)
             await asyncio.sleep(30)
 
 
@@ -584,21 +531,15 @@ async def main():
         log.error("Missing: %s", ", ".join(missing))
         return
 
-    # Create application for handling callbacks
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-    
-    # Add callback handler for translations
     app.add_handler(CallbackQueryHandler(handle_translation))
     
     bot = app.bot
     seen_ids = load_seen_ids()
-    log.info("Bot started - Retweet edition with Iran emojis + Translation")
+    log.info("Bot started - 12h filtering + custom accounts + fallback logic")
     
-    # Start the application
     async with app:
         await app.start()
-        
-        # Run posting cycle concurrently
         try:
             await run_posting_cycle(bot, seen_ids)
         finally:
