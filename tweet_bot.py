@@ -19,7 +19,6 @@ import requests
 import xml.etree.ElementTree as ET
 from telegram import Bot, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.error import TelegramError
-from googletrans import Translator
 
 logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s", level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -94,9 +93,6 @@ TREND_KEYWORDS = [
     "Iran",
     "Israel",
 ]
-
-translator = Translator()
-
 
 def load_seen_ids():
     if SEEN_IDS_FILE.exists():
