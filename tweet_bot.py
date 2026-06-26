@@ -36,34 +36,36 @@ SEEN_IDS_FILE = Path("seen_tweet_ids.json")
 # ═══════════════════════════════════════════════════════════════
 
 CATEGORY_ACCOUNTS = {
-    "Funny": {
-        "accounts": ["dril", "dadsaysjokes", "funnytweeter", "thedad"],
-        "emoji": "🟨🟨🟨",
+ "Funny": {  
+        "accounts": ["dril", "shitpost_2077", "funnytweeter", "gaming_leake"],  
+        "emoji": "🟨🟨🟨🟨🟨🟨",
     },
-    "Political": {
-        "accounts": ["Reuters", "AP", "politico", "axios"],
-        "emoji": "🔴🔴🔴",
+    "Political": {  
+        "accounts": ["Reuters", "AP", "politico", "axios"],  
+        "emoji": "🔴🔴🔴🔴🔴🔴",
     },
-    "News": {
-        "accounts": ["BBCBreaking", "Reuters", "AP", "nytimes"],
-        "emoji": "🔵🔵🔵",
+    "News": {  
+        "accounts": ["BBCBreaking", "Reuters", "ManotoNews", "nytimes", "guardian", "DiscussingFilm"],  
+        "emoji": "🔵🔵🔵🔵🔵🔵",
     },
-    "Gaming": {
-        "accounts": ["IGN", "PlayStation", "Xbox", "GameSpot"],
-        "emoji": "🟣🟣🟣",
+    "Gaming": {  
+        "accounts": ["IGN", "PlayStation", "Xbox", "GameSpot", "Dexerto", "InternetH0F"],  
+        "emoji": "🟣🟣🟣🟣🟣🟣",
     },
-    "Unhinged": {
-        "accounts": ["dril", "NotGaryBusey", "TweetsByKosta"],
-        "emoji": "🟠🟠⚠️",
+    "Unhinged": {  
+        "accounts": ["dril", "", "TweetsByKosta", "insaneposes", "middleclassfancy", "LocalBateman"],  
+        "emoji": "🟠🟠⚠️⚠️🟠🟠",
     },
 }
 
 IRAN_ACCOUNTS = [
     "IranIntl_Fa",
-    "bbcpersian",
-    "VOAIran",
-    "manototv",
-    "RFE_FARSI",
+    "MatinSenPai",
+    "BhFak46419",
+    "Realneo101",
+    "thetwelfth_Imam",
+    "PahlaviReza",
+    "SAVAK071",
 ]
 
 IRAN_EMOJI = "☀️☀️🦁☀️☀️"
@@ -81,18 +83,28 @@ HEADERS = {
 }
 
 TREND_KEYWORDS = [
-    "Ukraine",
-    "Palestine",
+    "XBOX",
+    "PS5",
     "Trump",
-    "Biden",
-    "China",
-    "Russia",
+    "GTA VI",
+    "GTA 6",
+    "War",
     "AI",
     "Elon Musk",
     "SpaceX",
     "Tesla",
     "Iran",
     "Israel",
+]
+
+IRAN_TRENDS = [
+    "ایران",
+    "خامنه ای",
+    "دولت",
+    "سیاست",
+    "خبر",
+    "اقتصاد",
+    "جاوید شاه",
 ]
 
 def load_seen_ids():
