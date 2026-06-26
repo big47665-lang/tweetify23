@@ -17,7 +17,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 import requests
 import xml.etree.ElementTree as ET
-from telegram import Bot, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import Bot, InlineKeyboardMarkup, InlineKeyboardButton, Update
+from telegram.ext import Application, CallbackQueryHandler, ContextTypes
 from telegram.error import TelegramError
 
 logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s", level=logging.INFO)
@@ -109,6 +110,45 @@ def clean_text(text):
     text = re.sub(r"<[^>]+>", "", text)
     text = re.sub(r"\s+", " ", text).strip()
     text = re.sub(r"http[s]?://\S+", "", text).strip()
+    return text
+
+
+def translate_to_persian(text):
+    """Translate English text to Persian using free API"""
+    try:
+        # Using MyMemory Translation API (free, no key needed)
+        url = "https://api.mymemory.translated.net/get"
+        params = {
+            "q": text[:500],  # API limit
+            "langpair": "en|fa"
+        }
+        resp = requests.get(url, params=params, timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get("responseStatus") == 200:
+                translated = data["responseData"]["translatedText"]
+                return translated
+    except Exception as e:
+        log.warning("Translation error: %s", e)
+    return text
+
+
+def translate_to_english(text):
+    """Translate Persian text to English using free API"""
+    try:
+        url = "https://api.mymemory.translated.net/get"
+        params = {
+            "q": text[:500],
+            "langpair": "fa|en"
+        }
+        resp = requests.get(url, params=params, timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get("responseStatus") == 200:
+                translated = data["responseData"]["translatedText"]
+                return translated
+    except Exception as e:
+        log.warning("Translation error: %s", e)
     return text
 
 
@@ -437,20 +477,44 @@ async def run_iran_cycle(bot, seen_ids):
     log.info("Posted Iran tweet from @%s", account)
 
 
-async def main():
-    missing = []
-    if TELEGRAM_BOT_TOKEN == "YOUR_BOT_TOKEN":
-        missing.append("TELEGRAM_BOT_TOKEN")
-    if not CHAT_IDS:
-        missing.append("TELEGRAM_CHAT_IDS")
-    if missing:
-        log.error("Missing: %s", ", ".join(missing))
-        return
+async def handle_translation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle translation button clicks"""
+    query = update.callback_query
+    await query.answer()
+    
+    try:
+        data = query.data
+        
+        if data.startswith("translate_fa:"):
+            # Translate to Persian
+            original_text = query.message.text
+            # Extract just the tweet text (after emoji and formatting)
+            lines = original_text.split("\n")
+            tweet_text = "\n".join([l for l in lines if l and not l.startswith("—") and not l.startswith("@")])
+            
+            translated = translate_to_persian(tweet_text)
+            response = "🇮🇷 *Persian Translation:*\n\n" + translated
+            
+        elif data.startswith("translate_en:"):
+            # Translate to English
+            original_text = query.message.text
+            lines = original_text.split("\n")
+            tweet_text = "\n".join([l for l in lines if l and not l.startswith("—") and not l.startswith("@")])
+            
+            translated = translate_to_english(tweet_text)
+            response = "🇬🇧 *English Translation:*\n\n" + translated
+        else:
+            response = "Translation request not recognized"
+        
+        await query.edit_message_text(text=query.message.text + "\n\n" + response)
+    
+    except Exception as e:
+        log.error("Translation callback error: %s", e)
+        await query.edit_message_text(text=query.message.text + "\n\n❌ Translation failed")
 
-    bot = Bot(token=TELEGRAM_BOT_TOKEN)
-    seen_ids = load_seen_ids()
-    log.info("Bot started - Retweet edition with Iran emojis")
 
+async def run_posting_cycle(bot, seen_ids):
+    """Run the posting cycle in background"""
     category_timer = 0
     news_timer = 0
     iran_timer = 0
@@ -475,8 +539,39 @@ async def main():
             iran_timer -= 60
 
         except Exception as e:
-            log.exception("Error: %s", e)
+            log.exception("Posting cycle error: %s", e)
             await asyncio.sleep(30)
+
+
+async def main():
+    missing = []
+    if TELEGRAM_BOT_TOKEN == "YOUR_BOT_TOKEN":
+        missing.append("TELEGRAM_BOT_TOKEN")
+    if not CHAT_IDS:
+        missing.append("TELEGRAM_CHAT_IDS")
+    if missing:
+        log.error("Missing: %s", ", ".join(missing))
+        return
+
+    # Create application for handling callbacks
+    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    
+    # Add callback handler for translations
+    app.add_handler(CallbackQueryHandler(handle_translation))
+    
+    bot = app.bot
+    seen_ids = load_seen_ids()
+    log.info("Bot started - Retweet edition with Iran emojis + Translation")
+    
+    # Start the application
+    async with app:
+        await app.start()
+        
+        # Run posting cycle concurrently
+        try:
+            await run_posting_cycle(bot, seen_ids)
+        finally:
+            await app.stop()
 
 
 if __name__ == "__main__":
