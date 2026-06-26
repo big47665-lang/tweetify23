@@ -36,36 +36,34 @@ SEEN_IDS_FILE = Path("seen_tweet_ids.json")
 # ═══════════════════════════════════════════════════════════════
 
 CATEGORY_ACCOUNTS = {
- "Funny": {  
-        "accounts": ["dril", "shitpost_2077", "funnytweeter", "gaming_leake"],  
-        "emoji": "🟨🟨🟨🟨🟨🟨",
+    "Funny": {
+        "accounts": ["dril", "dadsaysjokes", "funnytweeter", "thedad"],
+        "emoji": "🟨🟨🟨",
     },
-    "Political": {  
-        "accounts": ["Reuters", "AP", "politico", "axios"],  
-        "emoji": "🔴🔴🔴🔴🔴🔴",
+    "Political": {
+        "accounts": ["Reuters", "AP", "politico", "axios"],
+        "emoji": "🔴🔴🔴",
     },
-    "News": {  
-        "accounts": ["BBCBreaking", "Reuters", "ManotoNews", "nytimes", "guardian", "DiscussingFilm"],  
-        "emoji": "🔵🔵🔵🔵🔵🔵",
+    "News": {
+        "accounts": ["BBCBreaking", "Reuters", "AP", "nytimes"],
+        "emoji": "🔵🔵🔵",
     },
-    "Gaming": {  
-        "accounts": ["IGN", "PlayStation", "Xbox", "GameSpot", "Dexerto", "InternetH0F"],  
-        "emoji": "🟣🟣🟣🟣🟣🟣",
+    "Gaming": {
+        "accounts": ["IGN", "PlayStation", "Xbox", "GameSpot"],
+        "emoji": "🟣🟣🟣",
     },
-    "Unhinged": {  
-        "accounts": ["dril", "", "TweetsByKosta", "insaneposes", "middleclassfancy", "LocalBateman"],  
-        "emoji": "🟠🟠⚠️⚠️🟠🟠",
+    "Unhinged": {
+        "accounts": ["dril", "NotGaryBusey", "TweetsByKosta"],
+        "emoji": "🟠🟠⚠️",
     },
 }
 
 IRAN_ACCOUNTS = [
     "IranIntl_Fa",
-    "MatinSenPai",
-    "BhFak46419",
-    "Realneo101",
-    "thetwelfth_Imam",
-    "PahlaviReza",
-    "SAVAK071",
+    "bbcpersian",
+    "VOAIran",
+    "manototv",
+    "RFE_FARSI",
 ]
 
 IRAN_EMOJI = "☀️☀️🦁☀️☀️"
@@ -83,28 +81,18 @@ HEADERS = {
 }
 
 TREND_KEYWORDS = [
-    "XBOX",
-    "PS5",
+    "Ukraine",
+    "Palestine",
     "Trump",
-    "GTA VI",
-    "GTA 6",
-    "War",
+    "Biden",
+    "China",
+    "Russia",
     "AI",
     "Elon Musk",
     "SpaceX",
     "Tesla",
     "Iran",
     "Israel",
-]
-
-IRAN_TRENDS = [
-    "ایران",
-    "خامنه ای",
-    "دولت",
-    "سیاست",
-    "خبر",
-    "اقتصاد",
-    "جاوید شاه",
 ]
 
 def load_seen_ids():
@@ -134,14 +122,14 @@ def translate_to_persian(text):
             "q": text[:500],  # API limit
             "langpair": "en|fa"
         }
-        resp = requests.get(url, params=params, timeout=10)
+        resp = requests.get(url, params=params, timeout=8)
         if resp.status_code == 200:
             data = resp.json()
             if data.get("responseStatus") == 200:
                 translated = data["responseData"]["translatedText"]
-                return translated
+                return translated if translated else text
     except Exception as e:
-        log.warning("Translation error: %s", e)
+        log.warning("Translation to Persian failed: %s", e)
     return text
 
 
@@ -153,14 +141,14 @@ def translate_to_english(text):
             "q": text[:500],
             "langpair": "fa|en"
         }
-        resp = requests.get(url, params=params, timeout=10)
+        resp = requests.get(url, params=params, timeout=8)
         if resp.status_code == 200:
             data = resp.json()
             if data.get("responseStatus") == 200:
                 translated = data["responseData"]["translatedText"]
-                return translated
+                return translated if translated else text
     except Exception as e:
-        log.warning("Translation error: %s", e)
+        log.warning("Translation to English failed: %s", e)
     return text
 
 
@@ -303,11 +291,16 @@ def search_trending(instance, keyword):
 
 
 def download_media(url):
-    """Download media file"""
+    """Download media file - skip if it's too small (likely thumbnail)"""
     try:
         resp = requests.get(url, headers=HEADERS, timeout=15)
         if resp.status_code == 200:
-            return io.BytesIO(resp.content)
+            # Check file size - if < 100KB, it's probably just a thumbnail
+            if len(resp.content) > 102400:  # 100KB minimum for real video
+                return io.BytesIO(resp.content)
+            elif url.lower().endswith((".jpg", ".jpeg", ".png")):
+                # Images are OK to be small
+                return io.BytesIO(resp.content)
     except Exception as e:
         log.warning("Media download failed: %s", e)
     return None
@@ -492,37 +485,48 @@ async def run_iran_cycle(bot, seen_ids):
 async def handle_translation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle translation button clicks"""
     query = update.callback_query
-    await query.answer()
     
     try:
+        await query.answer(text="Translating...", show_alert=False)
+        
         data = query.data
+        original_text = query.message.text
         
-        if data.startswith("translate_fa:"):
+        # Extract tweet text (skip emojis, signatures, etc)
+        lines = original_text.split("\n")
+        tweet_text = ""
+        for line in lines:
+            if line and not line.startswith("—") and not line.startswith("@") and not line.startswith("🔄"):
+                if not any(c in line for c in ["~~~~", "----"]):
+                    tweet_text += line + " "
+        tweet_text = tweet_text.strip()[:300]
+        
+        if not tweet_text:
+            await query.answer(text="No text to translate", show_alert=True)
+            return
+        
+        response = ""
+        
+        if "translate_fa" in data:
             # Translate to Persian
-            original_text = query.message.text
-            # Extract just the tweet text (after emoji and formatting)
-            lines = original_text.split("\n")
-            tweet_text = "\n".join([l for l in lines if l and not l.startswith("—") and not l.startswith("@")])
-            
+            log.info("Translating to Persian: %s", tweet_text[:50])
             translated = translate_to_persian(tweet_text)
-            response = "🇮🇷 *Persian Translation:*\n\n" + translated
+            response = "\n\n🇮🇷 *فارسی ترجمه:*\n\n" + translated
             
-        elif data.startswith("translate_en:"):
+        elif "translate_en" in data:
             # Translate to English
-            original_text = query.message.text
-            lines = original_text.split("\n")
-            tweet_text = "\n".join([l for l in lines if l and not l.startswith("—") and not l.startswith("@")])
-            
+            log.info("Translating to English: %s", tweet_text[:50])
             translated = translate_to_english(tweet_text)
-            response = "🇬🇧 *English Translation:*\n\n" + translated
-        else:
-            response = "Translation request not recognized"
+            response = "\n\n🇬🇧 *English Translation:*\n\n" + translated
         
-        await query.edit_message_text(text=query.message.text + "\n\n" + response)
+        if response:
+            new_text = original_text + response
+            await query.edit_message_text(text=new_text)
+            await query.answer(text="Done!", show_alert=False)
     
     except Exception as e:
         log.error("Translation callback error: %s", e)
-        await query.edit_message_text(text=query.message.text + "\n\n❌ Translation failed")
+        await query.answer(text="Translation failed: " + str(e)[:50], show_alert=True)
 
 
 async def run_posting_cycle(bot, seen_ids):
