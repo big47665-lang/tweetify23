@@ -84,7 +84,7 @@ TREND_KEYWORDS = [
 ]
 
 IRAN_TRENDS = [
-    "ایران", "خامنه ای", "دولت", "سیاست", "خبر", "اقتصاد", "جاوید شاه" ,"ذرت" ,"عرزشی" ,"کتلت",
+    "ایران", "خامنه ای", "دولت", "سیاست", "خبر", "اقتصاد", "جاوید شاه",
 ]
 
 # ═══════════════════════════════════════════════════════════════
@@ -192,40 +192,58 @@ async def handle_translation(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     try:
         await query.answer(text="Translating...", show_alert=False)
+        log.info("Translation request: %s", query.data)
         
         data = query.data
-        original_text = query.message.text
+        original_text = query.message.text if query.message.text else ""
         
-        # Extract tweet text
+        # Extract tweet text more aggressively
         lines = original_text.split("\n")
         tweet_text = ""
         for line in lines:
-            if line and not line.startswith("—") and not line.startswith("@") and not line.startswith("🔄"):
-                if not any(c in line for c in ["~~~~", "----"]):
-                    tweet_text += line + " "
-        tweet_text = tweet_text.strip()[:300]
+            line = line.strip()
+            if (line and 
+                not line.startswith("—") and 
+                not line.startswith("@") and 
+                not line.startswith("🔄") and
+                not line.startswith("🇮🇷") and
+                not line.startswith("🇬🇧") and
+                len(line) > 3):
+                tweet_text += line + " "
+        
+        tweet_text = tweet_text.strip()[:400]
         
         if not tweet_text:
-            await query.answer(text="No text to translate", show_alert=True)
+            log.warning("No text extracted for translation")
+            await query.answer(text="No text found", show_alert=True)
             return
         
+        log.info("Translating %d chars", len(tweet_text))
+        
         response = ""
-        
         if "translate_fa" in data:
+            log.info("Translating to Persian")
             translated = translate_to_persian(tweet_text)
-            response = "\n\n🇮🇷 *فارسی ترجمه:*\n\n" + translated
+            response = "🇮🇷 *فارسی ترجمه:*\n\n" + translated
         elif "translate_en" in data:
+            log.info("Translating to English")
             translated = translate_to_english(tweet_text)
-            response = "\n\n🇬🇧 *English Translation:*\n\n" + translated
+            response = "🇬🇧 *English Translation:*\n\n" + translated
+        else:
+            await query.answer(text="Unknown request", show_alert=True)
+            return
         
-        if response:
-            new_text = original_text + response
-            await query.edit_message_text(text=new_text)
-            await query.answer(text="Done!", show_alert=False)
+        # Send as SEPARATE reply message (don't edit)
+        await query.message.reply_text(response, parse_mode="Markdown")
+        await query.answer(text="✅ Translation sent!", show_alert=False)
+        log.info("Translation sent successfully")
     
     except Exception as e:
-        log.error("Translation error: %s", e)
-        await query.answer(text="Failed: " + str(e)[:50], show_alert=True)
+        log.error("Translation error: %s", e, exc_info=True)
+        try:
+            await query.answer(text="Error occurred", show_alert=True)
+        except:
+            pass
 
 
 def get_working_instance():
@@ -297,14 +315,27 @@ def fetch_rss(instance, username):
 
 
 def download_media(url):
-    """Download media - skip if too small"""
+    """Download media file - better video detection"""
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=15)
+        resp = requests.get(url, headers=HEADERS, timeout=20, stream=True)
         if resp.status_code == 200:
-            if len(resp.content) > 102400:
-                return io.BytesIO(resp.content)
-            elif url.lower().endswith((".jpg", ".jpeg", ".png")):
-                return io.BytesIO(resp.content)
+            content = resp.content
+            file_size = len(content)
+            
+            is_video = url.lower().endswith((".mp4", ".webm", ".mov", ".avi", ".mkv"))
+            
+            if is_video:
+                # For videos, be lenient on size
+                log.info("Detected video: %s (%d bytes)", url[-50:], file_size)
+                return io.BytesIO(content)
+            elif url.lower().endswith((".jpg", ".jpeg", ".png", ".gif")):
+                # Images - any size OK
+                log.info("Detected image: %s (%d bytes)", url[-50:], file_size)
+                return io.BytesIO(content)
+            else:
+                # Unknown type, return if reasonable size
+                if file_size > 10240:
+                    return io.BytesIO(content)
     except Exception as e:
         log.warning("Media download failed: %s", e)
     return None
