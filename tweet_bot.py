@@ -84,7 +84,7 @@ TREND_KEYWORDS = [
 ]
 
 IRAN_TRENDS = [
-    "ایران", "خامنه ای", "دولت", "سیاست", "خبر", "اقتصاد", "جاوید شاه" ,"ذرت" ,"عرزشی" ,"کتلت",
+    "ایران", "خامنه ای", "دولت", "سیاست", "خبر", "اقتصاد", "جاوید شاه",
 ]
 
 # ═══════════════════════════════════════════════════════════════
@@ -596,5 +596,182 @@ async def main():
             await app.stop()
 
 
+async def handle_command_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /start command"""
+    keyboard = [[
+        InlineKeyboardButton("📱 Open Dashboard", url="https://your-vercel-url.vercel.app"),
+        InlineKeyboardButton("ℹ️ Help", callback_data="help"),
+    ]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        "🎉 Welcome to *Tweet1fy Bot*!\n\n"
+        "I automatically post trending tweets from:\n"
+        "🌍 World trends\n"
+        "🇮🇷 Iran timeline\n"
+        "📰 Today's news\n\n"
+        "Every 15 minutes in this chat!\n\n"
+        "Tap 'Open Dashboard' to see all tweets →",
+        parse_mode="Markdown",
+        reply_markup=reply_markup
+    )
+
+
+async def handle_command_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /help command"""
+    help_text = (
+        "*Tweet1fy Commands*\n\n"
+        "📍 */start* — Welcome message\n"
+        "❓ */help* — This message\n"
+        "📊 */stats* — Bot statistics\n"
+        "🔄 */refresh* — Force refresh tweets now\n"
+        "📱 */dashboard* — Open mini app\n\n"
+        "The bot posts automatically every 15 minutes."
+    )
+    await update.message.reply_text(help_text, parse_mode="Markdown")
+
+
+async def handle_command_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show bot statistics"""
+    seen_ids = load_seen_ids()
+    stats = (
+        "📊 *Bot Statistics*\n\n"
+        f"✅ Tweets tracked: {len(seen_ids)}\n"
+        f"🌍 Categories: 5 (Funny, Political, News, Gaming, Unhinged)\n"
+        f"🇮🇷 Iran accounts: 9\n"
+        f"📰 Update cycle: Every 15 minutes\n"
+        f"⏱️ Last update: {datetime.now(timezone.utc).strftime('%H:%M UTC')}"
+    )
+    await update.message.reply_text(stats, parse_mode="Markdown")
+
+
+async def handle_command_refresh(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Force refresh tweets immediately"""
+    await update.message.reply_text("🔄 Refreshing tweets... wait 10 seconds!")
+    
+    # Manually trigger a cycle
+    bot = context.bot
+    seen_ids = load_seen_ids()
+    await run_category_cycle(bot, seen_ids)
+    
+    await update.message.reply_text("✅ Refresh complete! New tweets posted.")
+
+
+# Flask/FastAPI endpoint to serve tweets to mini app
+from flask import Flask, jsonify
+import json as json_lib
+
+app_flask = Flask(__name__)
+
+@app_flask.route('/api/tweets', methods=['GET'])
+def get_tweets_api():
+    """API endpoint for mini app to fetch tweets"""
+    try:
+        # Read recent tweets from your bot's data
+        # In production, connect this to your bot's actual tweet storage
+        tweets_data = {
+            "worldTrending": [
+                {
+                    "id": 1,
+                    "user": "@BBCBreaking",
+                    "name": "BBC Breaking",
+                    "text": "Latest breaking news from around the world",
+                    "time": "now",
+                    "likes": 45000,
+                    "retweets": 18000,
+                    "views": "2.1M"
+                },
+                {
+                    "id": 2,
+                    "user": "@Reuters",
+                    "name": "Reuters",
+                    "text": "Major international developments happening now",
+                    "time": "5 min ago",
+                    "likes": 32000,
+                    "retweets": 14000,
+                    "views": "1.4M"
+                }
+            ],
+            "iranTimeline": [
+                {
+                    "id": 10,
+                    "user": "@IranIntl_Fa",
+                    "name": "Iran International",
+                    "text": "اخبار فوری از ایران و جهان",
+                    "time": "2 min ago",
+                    "likes": 21000,
+                    "retweets": 9500,
+                    "views": "1.1M"
+                },
+                {
+                    "id": 11,
+                    "user": "@bbcpersian",
+                    "name": "BBC Persian",
+                    "text": "توضیحات روز اتفاقات مهم",
+                    "time": "8 min ago",
+                    "likes": 18500,
+                    "retweets": 8000,
+                    "views": "900K"
+                }
+            ],
+            "news": [
+                {
+                    "id": 20,
+                    "user": "@BreakingNews",
+                    "name": "Breaking News",
+                    "text": "Today's top stories and headlines",
+                    "time": "1 min ago",
+                    "likes": 56000,
+                    "retweets": 22000,
+                    "views": "3.2M"
+                },
+                {
+                    "id": 21,
+                    "user": "@AP",
+                    "name": "Associated Press",
+                    "text": "Associated Press news updates",
+                    "time": "4 min ago",
+                    "likes": 39000,
+                    "retweets": 16000,
+                    "views": "2M"
+                }
+            ]
+        }
+        return jsonify(tweets_data), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+async def main_bot():
+    missing = []
+    if TELEGRAM_BOT_TOKEN == "YOUR_BOT_TOKEN":
+        missing.append("TELEGRAM_BOT_TOKEN")
+    if not CHAT_IDS:
+        missing.append("TELEGRAM_CHAT_IDS")
+    if missing:
+        log.error("Missing: %s", ", ".join(missing))
+        return
+
+    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    
+    # Add handlers
+    app.add_handler(CommandHandler("start", handle_command_start))
+    app.add_handler(CommandHandler("help", handle_command_help))
+    app.add_handler(CommandHandler("stats", handle_command_stats))
+    app.add_handler(CommandHandler("refresh", handle_command_refresh))
+    app.add_handler(CallbackQueryHandler(handle_translation))
+    
+    bot = app.bot
+    seen_ids = load_seen_ids()
+    log.info("Bot started - Interactive + API mode")
+    
+    async with app:
+        await app.start()
+        try:
+            await run_posting_cycle(bot, seen_ids)
+        finally:
+            await app.stop()
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(main_bot())
