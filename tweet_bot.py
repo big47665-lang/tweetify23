@@ -109,32 +109,51 @@ def clean_text(text):
 
 
 def translate_to_persian(text):
-    """Translate English text to Persian"""
+    """Translate English to Persian using faster API"""
+    if not text or len(text) < 5:
+        return text
     try:
+        # Try MyMemory first
         url = "https://api.mymemory.translated.net/get"
-        params = {"q": text[:500], "langpair": "en|fa"}
-        resp = requests.get(url, params=params, timeout=8)
+        params = {
+            "q": text[:450],
+            "langpair": "en|fa"
+        }
+        resp = requests.get(url, params=params, timeout=6)
         if resp.status_code == 200:
             data = resp.json()
             if data.get("responseStatus") == 200:
-                return data["responseData"]["translatedText"] or text
+                result = data.get("responseData", {}).get("translatedText", "")
+                if result and result != text:
+                    return result
     except Exception as e:
-        log.warning("Translation to Persian failed: %s", e)
+        log.warning("MyMemory translation failed: %s", e)
+    
+    # If failed, return original
     return text
 
 
 def translate_to_english(text):
-    """Translate Persian text to English"""
+    """Translate Persian to English using faster API"""
+    if not text or len(text) < 5:
+        return text
     try:
         url = "https://api.mymemory.translated.net/get"
-        params = {"q": text[:500], "langpair": "fa|en"}
-        resp = requests.get(url, params=params, timeout=8)
+        params = {
+            "q": text[:450],
+            "langpair": "fa|en"
+        }
+        resp = requests.get(url, params=params, timeout=6)
         if resp.status_code == 200:
             data = resp.json()
             if data.get("responseStatus") == 200:
-                return data["responseData"]["translatedText"] or text
+                result = data.get("responseData", {}).get("translatedText", "")
+                if result and result != text:
+                    return result
     except Exception as e:
-        log.warning("Translation to English failed: %s", e)
+        log.warning("MyMemory translation failed: %s", e)
+    
+    # If failed, return original
     return text
 
 
