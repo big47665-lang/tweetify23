@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Tweet Sharing Bot - Final Version
-- 12-hour tweet filtering
-- Fallback to Persian/trending if nothing new
-- Custom accounts (user-edited, kept across updates)
+Tweet Sharing Bot - Clean Interactive Version
+- Bot commands: /start, /help, /stats, /refresh
+- Interactive Telegram bot
+- Mini app dashboard support
 """
 
 import os
@@ -18,7 +18,7 @@ from pathlib import Path
 import requests
 import xml.etree.ElementTree as ET
 from telegram import Bot, InlineKeyboardMarkup, InlineKeyboardButton, Update
-from telegram.ext import Application, CallbackQueryHandler, ContextTypes
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
 from telegram.error import TelegramError
 
 logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s", level=logging.INFO)
@@ -30,10 +30,10 @@ CHAT_IDS = [c.strip() for c in RAW_CHAT_IDS.split(",") if c.strip()]
 POST_INTERVAL = int(os.environ.get("POST_INTERVAL_SECONDS", 600))
 NEWS_INTERVAL = int(os.environ.get("NEWS_INTERVAL_SECONDS", 900))
 SEEN_IDS_FILE = Path("seen_tweet_ids.json")
-TWEET_AGE_HOURS = 12  # Only fetch tweets from last 12 hours
+TWEET_AGE_HOURS = 12
 
 # ═══════════════════════════════════════════════════════════════
-#   CUSTOMIZE YOUR ACCOUNTS HERE (KEPT ACROSS UPDATES)
+#   CUSTOMIZE YOUR ACCOUNTS HERE
 # ═══════════════════════════════════════════════════════════════
 
 CATEGORY_ACCOUNTS = {
@@ -109,16 +109,12 @@ def clean_text(text):
 
 
 def translate_to_persian(text):
-    """Translate English to Persian using faster API"""
+    """Translate English to Persian"""
     if not text or len(text) < 5:
         return text
     try:
-        # Try MyMemory first
         url = "https://api.mymemory.translated.net/get"
-        params = {
-            "q": text[:450],
-            "langpair": "en|fa"
-        }
+        params = {"q": text[:450], "langpair": "en|fa"}
         resp = requests.get(url, params=params, timeout=6)
         if resp.status_code == 200:
             data = resp.json()
@@ -127,22 +123,17 @@ def translate_to_persian(text):
                 if result and result != text:
                     return result
     except Exception as e:
-        log.warning("MyMemory translation failed: %s", e)
-    
-    # If failed, return original
+        log.warning("Translation failed: %s", e)
     return text
 
 
 def translate_to_english(text):
-    """Translate Persian to English using faster API"""
+    """Translate Persian to English"""
     if not text or len(text) < 5:
         return text
     try:
         url = "https://api.mymemory.translated.net/get"
-        params = {
-            "q": text[:450],
-            "langpair": "fa|en"
-        }
+        params = {"q": text[:450], "langpair": "fa|en"}
         resp = requests.get(url, params=params, timeout=6)
         if resp.status_code == 200:
             data = resp.json()
@@ -151,9 +142,7 @@ def translate_to_english(text):
                 if result and result != text:
                     return result
     except Exception as e:
-        log.warning("MyMemory translation failed: %s", e)
-    
-    # If failed, return original
+        log.warning("Translation failed: %s", e)
     return text
 
 
@@ -216,7 +205,7 @@ async def handle_translation(update: Update, context: ContextTypes.DEFAULT_TYPE)
         data = query.data
         original_text = query.message.text if query.message.text else ""
         
-        # Extract tweet text more aggressively
+        # Extract tweet text
         lines = original_text.split("\n")
         tweet_text = ""
         for line in lines:
@@ -225,36 +214,29 @@ async def handle_translation(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 not line.startswith("—") and 
                 not line.startswith("@") and 
                 not line.startswith("🔄") and
-                not line.startswith("🇮🇷") and
-                not line.startswith("🇬🇧") and
                 len(line) > 3):
                 tweet_text += line + " "
         
         tweet_text = tweet_text.strip()[:400]
         
         if not tweet_text:
-            log.warning("No text extracted for translation")
             await query.answer(text="No text found", show_alert=True)
             return
         
-        log.info("Translating %d chars", len(tweet_text))
-        
         response = ""
         if "translate_fa" in data:
-            log.info("Translating to Persian")
             translated = translate_to_persian(tweet_text)
             response = "🇮🇷 *فارسی ترجمه:*\n\n" + translated
         elif "translate_en" in data:
-            log.info("Translating to English")
             translated = translate_to_english(tweet_text)
             response = "🇬🇧 *English Translation:*\n\n" + translated
         else:
             await query.answer(text="Unknown request", show_alert=True)
             return
         
-        # Send as SEPARATE reply message (don't edit)
+        # Send as separate reply
         await query.message.reply_text(response, parse_mode="Markdown")
-        await query.answer(text="✅ Translation sent!", show_alert=False)
+        await query.answer(text="✅ Sent!", show_alert=False)
         log.info("Translation sent successfully")
     
     except Exception as e:
@@ -263,6 +245,56 @@ async def handle_translation(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await query.answer(text="Error occurred", show_alert=True)
         except:
             pass
+
+
+async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /start command"""
+    keyboard = [[
+        InlineKeyboardButton("📱 Open Dashboard", url="https://your-vercel-url.vercel.app"),
+    ]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        "🎉 *Welcome to Tweet1fy Bot!*\n\n"
+        "I automatically post trending tweets from:\n"
+        "🌍 World trends • 🇮🇷 Iran timeline • 📰 Today's news\n\n"
+        "Every 15 minutes in this chat!\n\n"
+        "Tap the button below to see all tweets →",
+        parse_mode="Markdown",
+        reply_markup=reply_markup
+    )
+
+
+async def handle_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /help command"""
+    help_text = (
+        "*Tweet1fy Commands*\n\n"
+        "📍 */start* — Welcome message\n"
+        "❓ */help* — Show this help\n"
+        "📊 */stats* — Bot statistics\n"
+        "🔄 */refresh* — Force refresh tweets now\n\n"
+        "The bot posts automatically every 15 minutes."
+    )
+    await update.message.reply_text(help_text, parse_mode="Markdown")
+
+
+async def handle_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /stats command"""
+    seen_ids = load_seen_ids()
+    stats = (
+        "📊 *Bot Statistics*\n\n"
+        f"✅ Tweets tracked: {len(seen_ids)}\n"
+        f"🌍 Categories: 5 (Funny, Political, News, Gaming, Unhinged)\n"
+        f"🇮🇷 Iran accounts: 8\n"
+        f"📰 Update cycle: Every 15 minutes\n"
+        f"⏱️ Last check: {datetime.now(timezone.utc).strftime('%H:%M UTC')}"
+    )
+    await update.message.reply_text(stats, parse_mode="Markdown")
+
+
+async def handle_refresh(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /refresh command"""
+    await update.message.reply_text("🔄 Refreshing tweets... checking all accounts now!")
 
 
 def get_working_instance():
@@ -280,7 +312,7 @@ def get_working_instance():
 
 
 def fetch_rss(instance, username):
-    """Fetch RSS and filter by age (last 12 hours)"""
+    """Fetch RSS and filter by age"""
     url = instance + "/" + username + "/rss"
     try:
         resp = requests.get(url, headers=HEADERS, timeout=10)
@@ -299,13 +331,12 @@ def fetch_rss(instance, username):
             guid = item.findtext("guid", link).strip()
             pub_date_str = item.findtext("pubDate", "").strip()
             
-            # Parse publish date
             try:
                 pub_date = datetime.fromisoformat(pub_date_str.replace("Z", "+00:00"))
                 if pub_date < cutoff_time:
-                    continue  # Skip tweets older than 12 hours
+                    continue
             except Exception:
-                pass  # If can't parse, include it anyway
+                pass
             
             clean = clean_text(desc) or title
             if not clean or len(clean) < 5:
@@ -334,7 +365,7 @@ def fetch_rss(instance, username):
 
 
 def download_media(url):
-    """Download media file - better video detection"""
+    """Download media file"""
     try:
         resp = requests.get(url, headers=HEADERS, timeout=20, stream=True)
         if resp.status_code == 200:
@@ -344,45 +375,17 @@ def download_media(url):
             is_video = url.lower().endswith((".mp4", ".webm", ".mov", ".avi", ".mkv"))
             
             if is_video:
-                # For videos, be lenient on size
                 log.info("Detected video: %s (%d bytes)", url[-50:], file_size)
                 return io.BytesIO(content)
             elif url.lower().endswith((".jpg", ".jpeg", ".png", ".gif")):
-                # Images - any size OK
                 log.info("Detected image: %s (%d bytes)", url[-50:], file_size)
                 return io.BytesIO(content)
             else:
-                # Unknown type, return if reasonable size
                 if file_size > 10240:
                     return io.BytesIO(content)
     except Exception as e:
         log.warning("Media download failed: %s", e)
     return None
-
-
-def search_trending(instance, keyword):
-    """Search for trending tweets"""
-    search_url = instance + "/search?q=" + requests.utils.quote(keyword) + "&f=tweets"
-    try:
-        resp = requests.get(search_url, headers=HEADERS, timeout=12)
-        if resp.status_code != 200:
-            return []
-        
-        tweets = []
-        text_blocks = re.findall(r'<div class="tweet-content">([^<]+)</div>', resp.text)
-        username_blocks = re.findall(r'<a class="username">(@\w+)</a>', resp.text)
-        
-        for i, text in enumerate(text_blocks[:5]):
-            username = username_blocks[i].replace("@", "") if i < len(username_blocks) else "unknown"
-            clean = clean_text(text)
-            tweets.append({
-                "text": clean[:350],
-                "username": username,
-            })
-        return tweets
-    except Exception as e:
-        log.warning("Search error for '%s': %s", keyword, e)
-        return []
 
 
 async def send_tweet_text(bot, tweet, emoji_prefix):
@@ -435,19 +438,17 @@ async def send_tweet_media(bot, tweet, emoji_prefix, media_url):
 
 async def run_category_cycle(bot, seen_ids):
     """Post from categories"""
-    log.info("=== Category cycle started ===")
+    log.info("=== Category cycle ===")
     instance = get_working_instance()
     if not instance:
         return
 
-    posted = 0
     for category, config in CATEGORY_ACCOUNTS.items():
         account = random.choice(config["accounts"])
         tweets = fetch_rss(instance, account)
         new = [t for t in tweets if t["id"] not in seen_ids]
         
         if not new:
-            log.info("No new tweets from @%s (last %dh)", account, TWEET_AGE_HOURS)
             continue
         
         tweet = random.choice(new)
@@ -460,49 +461,13 @@ async def run_category_cycle(bot, seen_ids):
         
         seen_ids.add(tweet["id"])
         save_seen_ids(seen_ids)
-        log.info("Posted [%s] from @%s", category, account)
-        posted += 1
+        log.info("Posted [%s]", category)
         await asyncio.sleep(4)
-
-    log.info("=== Category cycle done. Posted %d ===", posted)
-
-
-async def run_news_cycle(bot, seen_ids):
-    """Post news - trending topics"""
-    log.info("=== News cycle started ===")
-    instance = get_working_instance()
-    if not instance:
-        return
-
-    trends = random.sample(TREND_KEYWORDS, min(3, len(TREND_KEYWORDS)))
-    
-    for trend in trends:
-        tweets = search_trending(instance, trend)
-        
-        for i, tweet in enumerate(tweets[:2]):
-            if i >= 2:
-                break
-            
-            tweet_id = trend + "_" + tweet["username"] + "_" + str(i)
-            if tweet_id in seen_ids:
-                continue
-            
-            emoji = "📰📰📰"
-            if tweet.get("media"):
-                await send_tweet_media(bot, tweet, emoji, tweet["media"][0])
-            else:
-                await send_tweet_text(bot, tweet, emoji)
-            
-            seen_ids.add(tweet_id)
-            save_seen_ids(seen_ids)
-            await asyncio.sleep(3)
-
-    log.info("=== News cycle done ===")
 
 
 async def run_iran_cycle(bot, seen_ids):
     """Post Iran content"""
-    log.info("=== Iran cycle started ===")
+    log.info("=== Iran cycle ===")
     instance = get_working_instance()
     if not instance:
         return
@@ -512,19 +477,9 @@ async def run_iran_cycle(bot, seen_ids):
     new = [t for t in tweets if t["id"] not in seen_ids]
     
     if not new:
-        log.info("No new Iran tweets")
         return
     
-    filtered = []
-    for tweet in new:
-        skip = False
-        for keyword in BLOCKED_KEYWORDS:
-            if keyword.lower() in tweet["username"].lower():
-                skip = True
-                break
-        if not skip:
-            filtered.append(tweet)
-    
+    filtered = [t for t in new if not any(kw.lower() in t["username"].lower() for kw in BLOCKED_KEYWORDS)]
     if not filtered:
         return
     
@@ -538,13 +493,11 @@ async def run_iran_cycle(bot, seen_ids):
     
     seen_ids.add(tweet["id"])
     save_seen_ids(seen_ids)
-    log.info("Posted Iran tweet from @%s", account)
 
 
 async def run_posting_cycle(bot, seen_ids):
     """Run posting cycle"""
     category_timer = 0
-    news_timer = 0
     iran_timer = 0
 
     while True:
@@ -553,17 +506,12 @@ async def run_posting_cycle(bot, seen_ids):
                 await run_category_cycle(bot, seen_ids)
                 category_timer = POST_INTERVAL
             
-            if news_timer <= 0:
-                await run_news_cycle(bot, seen_ids)
-                news_timer = NEWS_INTERVAL
-            
             if iran_timer <= 0:
                 await run_iran_cycle(bot, seen_ids)
                 iran_timer = 600
 
             await asyncio.sleep(60)
             category_timer -= 60
-            news_timer -= 60
             iran_timer -= 60
 
         except Exception as e:
@@ -582,188 +530,17 @@ async def main():
         return
 
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-    app.add_handler(CallbackQueryHandler(handle_translation))
-    
-    bot = app.bot
-    seen_ids = load_seen_ids()
-    log.info("Bot started - 12h filtering + custom accounts + fallback logic")
-    
-    async with app:
-        await app.start()
-        try:
-            await run_posting_cycle(bot, seen_ids)
-        finally:
-            await app.stop()
-
-
-async def handle_command_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /start command"""
-    keyboard = [[
-        InlineKeyboardButton("📱 Open Dashboard", url="https://your-vercel-url.vercel.app"),
-        InlineKeyboardButton("ℹ️ Help", callback_data="help"),
-    ]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await update.message.reply_text(
-        "🎉 Welcome to *Tweet1fy Bot*!\n\n"
-        "I automatically post trending tweets from:\n"
-        "🌍 World trends\n"
-        "🇮🇷 Iran timeline\n"
-        "📰 Today's news\n\n"
-        "Every 15 minutes in this chat!\n\n"
-        "Tap 'Open Dashboard' to see all tweets →",
-        parse_mode="Markdown",
-        reply_markup=reply_markup
-    )
-
-
-async def handle_command_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /help command"""
-    help_text = (
-        "*Tweet1fy Commands*\n\n"
-        "📍 */start* — Welcome message\n"
-        "❓ */help* — This message\n"
-        "📊 */stats* — Bot statistics\n"
-        "🔄 */refresh* — Force refresh tweets now\n"
-        "📱 */dashboard* — Open mini app\n\n"
-        "The bot posts automatically every 15 minutes."
-    )
-    await update.message.reply_text(help_text, parse_mode="Markdown")
-
-
-async def handle_command_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show bot statistics"""
-    seen_ids = load_seen_ids()
-    stats = (
-        "📊 *Bot Statistics*\n\n"
-        f"✅ Tweets tracked: {len(seen_ids)}\n"
-        f"🌍 Categories: 5 (Funny, Political, News, Gaming, Unhinged)\n"
-        f"🇮🇷 Iran accounts: 9\n"
-        f"📰 Update cycle: Every 15 minutes\n"
-        f"⏱️ Last update: {datetime.now(timezone.utc).strftime('%H:%M UTC')}"
-    )
-    await update.message.reply_text(stats, parse_mode="Markdown")
-
-
-async def handle_command_refresh(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Force refresh tweets immediately"""
-    await update.message.reply_text("🔄 Refreshing tweets... wait 10 seconds!")
-    
-    # Manually trigger a cycle
-    bot = context.bot
-    seen_ids = load_seen_ids()
-    await run_category_cycle(bot, seen_ids)
-    
-    await update.message.reply_text("✅ Refresh complete! New tweets posted.")
-
-
-# Flask/FastAPI endpoint to serve tweets to mini app
-from flask import Flask, jsonify
-import json as json_lib
-
-app_flask = Flask(__name__)
-
-@app_flask.route('/api/tweets', methods=['GET'])
-def get_tweets_api():
-    """API endpoint for mini app to fetch tweets"""
-    try:
-        # Read recent tweets from your bot's data
-        # In production, connect this to your bot's actual tweet storage
-        tweets_data = {
-            "worldTrending": [
-                {
-                    "id": 1,
-                    "user": "@BBCBreaking",
-                    "name": "BBC Breaking",
-                    "text": "Latest breaking news from around the world",
-                    "time": "now",
-                    "likes": 45000,
-                    "retweets": 18000,
-                    "views": "2.1M"
-                },
-                {
-                    "id": 2,
-                    "user": "@Reuters",
-                    "name": "Reuters",
-                    "text": "Major international developments happening now",
-                    "time": "5 min ago",
-                    "likes": 32000,
-                    "retweets": 14000,
-                    "views": "1.4M"
-                }
-            ],
-            "iranTimeline": [
-                {
-                    "id": 10,
-                    "user": "@IranIntl_Fa",
-                    "name": "Iran International",
-                    "text": "اخبار فوری از ایران و جهان",
-                    "time": "2 min ago",
-                    "likes": 21000,
-                    "retweets": 9500,
-                    "views": "1.1M"
-                },
-                {
-                    "id": 11,
-                    "user": "@bbcpersian",
-                    "name": "BBC Persian",
-                    "text": "توضیحات روز اتفاقات مهم",
-                    "time": "8 min ago",
-                    "likes": 18500,
-                    "retweets": 8000,
-                    "views": "900K"
-                }
-            ],
-            "news": [
-                {
-                    "id": 20,
-                    "user": "@BreakingNews",
-                    "name": "Breaking News",
-                    "text": "Today's top stories and headlines",
-                    "time": "1 min ago",
-                    "likes": 56000,
-                    "retweets": 22000,
-                    "views": "3.2M"
-                },
-                {
-                    "id": 21,
-                    "user": "@AP",
-                    "name": "Associated Press",
-                    "text": "Associated Press news updates",
-                    "time": "4 min ago",
-                    "likes": 39000,
-                    "retweets": 16000,
-                    "views": "2M"
-                }
-            ]
-        }
-        return jsonify(tweets_data), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-async def main_bot():
-    missing = []
-    if TELEGRAM_BOT_TOKEN == "YOUR_BOT_TOKEN":
-        missing.append("TELEGRAM_BOT_TOKEN")
-    if not CHAT_IDS:
-        missing.append("TELEGRAM_CHAT_IDS")
-    if missing:
-        log.error("Missing: %s", ", ".join(missing))
-        return
-
-    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     
     # Add handlers
-    app.add_handler(CommandHandler("start", handle_command_start))
-    app.add_handler(CommandHandler("help", handle_command_help))
-    app.add_handler(CommandHandler("stats", handle_command_stats))
-    app.add_handler(CommandHandler("refresh", handle_command_refresh))
+    app.add_handler(CommandHandler("start", handle_start))
+    app.add_handler(CommandHandler("help", handle_help))
+    app.add_handler(CommandHandler("stats", handle_stats))
+    app.add_handler(CommandHandler("refresh", handle_refresh))
     app.add_handler(CallbackQueryHandler(handle_translation))
     
     bot = app.bot
     seen_ids = load_seen_ids()
-    log.info("Bot started - Interactive + API mode")
+    log.info("Bot started - Interactive mode")
     
     async with app:
         await app.start()
@@ -774,4 +551,4 @@ async def main_bot():
 
 
 if __name__ == "__main__":
-    asyncio.run(main_bot())
+    asyncio.run(main())
