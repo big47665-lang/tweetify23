@@ -1,2 +1,5 @@
 python-telegram-bot==21.6
 requests==2.31.0
+Flask
+python-telegram-bot
+requests
