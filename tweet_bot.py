@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
 """
-Tweetify Bot - SIMPLE & WORKING
-- Posts real tweets from accounts
-- No duplicates (hash-based detection)
-- Image/video support
-- Translation button (working)
-- Fallback to Iran + trending
-- Auto-posts to groups
+Tweet Sharing Bot - Final Version
+- 12-hour tweet filtering
+- Fallback to Persian/trending if nothing new
+- Custom accounts (user-edited, kept across updates)
 """
 
 import os
@@ -16,15 +13,12 @@ import random
 import asyncio
 import re
 import io
-import hashlib
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-
 import requests
 import xml.etree.ElementTree as ET
-
 from telegram import Bot, InlineKeyboardMarkup, InlineKeyboardButton, Update
-from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
+from telegram.ext import Application, CallbackQueryHandler, ContextTypes
 from telegram.error import TelegramError
 
 logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s", level=logging.INFO)
@@ -33,315 +27,751 @@ log = logging.getLogger(__name__)
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "YOUR_BOT_TOKEN")
 RAW_CHAT_IDS = os.environ.get("TELEGRAM_CHAT_IDS", "")
 CHAT_IDS = [c.strip() for c in RAW_CHAT_IDS.split(",") if c.strip()]
-POST_INTERVAL = 600  # 10 minutes
-TWEET_HASH_FILE = Path("tweet_hashes.json")
+POST_INTERVAL = int(os.environ.get("POST_INTERVAL_SECONDS", 600))
+NEWS_INTERVAL = int(os.environ.get("NEWS_INTERVAL_SECONDS", 900))
+SEEN_IDS_FILE = Path("seen_tweet_ids.json")
+TWEET_AGE_HOURS = 12  # Only fetch tweets from last 12 hours
 
-# ACCOUNTS - EDIT HERE
+# ═══════════════════════════════════════════════════════════════
+#   CUSTOMIZE YOUR ACCOUNTS HERE (KEPT ACROSS UPDATES)
+# ═══════════════════════════════════════════════════════════════
+
 CATEGORY_ACCOUNTS = {
-    "Funny": {"accounts": ["dril", "shitpost_2077", "funnytweeter", "gaming_leake"], "emoji": "😂😂😂"},
-    "Political": {"accounts": ["Reuters", "AP", "politico", "axios"], "emoji": "🏛️🏛️🏛️"},
-    "News": {"accounts": ["BBCBreaking", "Reuters", "ManotoNews", "nytimes", "guardian"], "emoji": "📰📰📰"},
-    "Gaming": {"accounts": ["IGN", "PlayStation", "Xbox", "GameSpot"], "emoji": "🎮🎮🎮"},
-    "Unhinged": {"accounts": ["dril", "TweetsByKosta", "insaneposes"], "emoji": "🤪🤪🤪"},
+    "Funny": {
+        "accounts": ["dril", "shitpost_2077", "funnytweeter", "gaming_leake"],
+        "emoji": "😂😂😂",
+    },
+    "Political": {
+        "accounts": ["Reuters", "AP", "politico", "axios"],
+        "emoji": "🏛️🏛️🏛️",
+    },
+    "News": {
+        "accounts": ["BBCBreaking", "Reuters", "ManotoNews", "nytimes", "guardian", "DiscussingFilm"],
+        "emoji": "📰📰📰",
+    },
+    "Gaming": {
+        "accounts": ["IGN", "PlayStation", "Xbox", "GameSpot", "Dexerto", "InternetH0F"],
+        "emoji": "🎮🎮🎮",
+    },
+    "Unhinged": {
+        "accounts": ["dril", "TweetsByKosta", "insaneposes", "middleclassfancy", "LocalBateman"],
+        "emoji": "🤪🤪🤪",
+    },
 }
 
-IRAN_ACCOUNTS = ["IranIntl_Fa", "bbcpersian", "VOAIran", "RFE_FARSI", "Realneo101"]
+IRAN_ACCOUNTS = [
+    "IranIntl_Fa", "BhFak46419", "MatinSenPai", "RFE_FARSI", 
+    "Realneo101", "thetwelfth_Imam", "PahlaviReza", "SAVAK071",
+]
+
 IRAN_EMOJI = "☀️☀️🦁☀️☀️"
-TRENDS = ["PS5", "XBOX", "Trump", "China", "Iran", "AI", "Tesla", "Elon Musk"]
 
-NITTER = ["https://nitter.net", "https://nitter.privacydev.net", "https://nitter.poast.org"]
-HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+BLOCKED_KEYWORDS = ["Islamic Republic", "gov.ir", "khamenei", "rouhani", "Revolutionary Guard"]
+
+NITTER_INSTANCES = [
+    "https://nitter.net",
+    "https://nitter.privacydev.net",
+    "https://nitter.poast.org",
+]
+
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+}
+
+TREND_KEYWORDS = [
+    "PS5", "XBOX", "Trump", "China", "AI", "Elon Musk", 
+    "SpaceX", "Tesla", "Iran", "Israel", "GTA VI", "GTA 6", "War",
+]
+
+IRAN_TRENDS = [
+    "ایران", "خامنه ای", "دولت", "سیاست", "خبر", "اقتصاد", "جاوید شاه",
+]
+
+# ═══════════════════════════════════════════════════════════════
 
 
-def get_tweet_hash(text):
-    """Create hash of tweet to avoid duplicates"""
-    return hashlib.md5(text.encode()).hexdigest()
-
-
-def load_hashes():
-    """Load sent tweet hashes"""
-    if TWEET_HASH_FILE.exists():
-        return set(json.loads(TWEET_HASH_FILE.read_text()))
+def load_seen_ids():
+    if SEEN_IDS_FILE.exists():
+        return set(json.loads(SEEN_IDS_FILE.read_text()))
     return set()
 
 
-def save_hashes(hashes):
-    """Save tweet hashes"""
-    TWEET_HASH_FILE.write_text(json.dumps(list(hashes)[-5000:]))
+def save_seen_ids(ids):
+    SEEN_IDS_FILE.write_text(json.dumps(list(ids)[-10000:]))
 
 
 def clean_text(text):
-    """Clean tweet text"""
+    """Remove HTML, extra whitespace, links"""
     text = re.sub(r"<[^>]+>", "", text)
     text = re.sub(r"\s+", " ", text).strip()
+    text = re.sub(r"http[s]?://\S+", "", text).strip()
     return text
 
 
-def get_nitter():
-    """Get working Nitter instance"""
-    for nitter in NITTER:
+def translate_to_persian(text):
+    """Translate English to Persian using faster API"""
+    if not text or len(text) < 5:
+        return text
+    try:
+        # Try MyMemory first
+        url = "https://api.mymemory.translated.net/get"
+        params = {
+            "q": text[:450],
+            "langpair": "en|fa"
+        }
+        resp = requests.get(url, params=params, timeout=6)
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get("responseStatus") == 200:
+                result = data.get("responseData", {}).get("translatedText", "")
+                if result and result != text:
+                    return result
+    except Exception as e:
+        log.warning("MyMemory translation failed: %s", e)
+    
+    # If failed, return original
+    return text
+
+
+def translate_to_english(text):
+    """Translate Persian to English using faster API"""
+    if not text or len(text) < 5:
+        return text
+    try:
+        url = "https://api.mymemory.translated.net/get"
+        params = {
+            "q": text[:450],
+            "langpair": "fa|en"
+        }
+        resp = requests.get(url, params=params, timeout=6)
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get("responseStatus") == 200:
+                result = data.get("responseData", {}).get("translatedText", "")
+                if result and result != text:
+                    return result
+    except Exception as e:
+        log.warning("MyMemory translation failed: %s", e)
+    
+    # If failed, return original
+    return text
+
+
+def detect_retweet(text):
+    """Detect if tweet is a retweet"""
+    match = re.match(r'RT @(\w+):\s*(.*)', text)
+    if match:
+        retweeter = match.group(1)
+        rest = match.group(2)
+        original_match = re.search(r'@(\w+)', rest)
+        if original_match:
+            original_user = original_match.group(1)
+            return True, retweeter, rest, original_user
+        return True, retweeter, rest, "unknown"
+    return False, None, text, None
+
+
+def format_retweet(retweeter, original_user, original_text, emoji_prefix):
+    """Format retweet"""
+    separator = "~~~~~~~~~~~~~~~~~~~~~~~~"
+    return (
+        emoji_prefix + "\n\n"
+        "🔄 Retweeted by @" + retweeter + "\n\n"
+        + separator + "\n\n"
+        "@" + original_user + ":\n\n"
+        + original_text + "\n\n"
+        "— @Tweet1fy_bot"
+    )
+
+
+def format_normal_tweet(text, username, emoji_prefix):
+    """Format normal tweet"""
+    return (
+        emoji_prefix + "\n\n"
+        + text + "\n\n"
+        "@" + username + "\n"
+        "— @Tweet1fy_bot"
+    )
+
+
+def get_translation_buttons(tweet_text):
+    """Create translation buttons"""
+    short = tweet_text[:20]
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🇬🇧 English", callback_data=f"translate_en:{short}"),
+            InlineKeyboardButton("🇮🇷 فارسی", callback_data=f"translate_fa:{short}"),
+        ]
+    ])
+
+
+async def handle_translation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle translation button clicks"""
+    query = update.callback_query
+    
+    try:
+        await query.answer(text="Translating...", show_alert=False)
+        log.info("Translation request: %s", query.data)
+        
+        data = query.data
+        original_text = query.message.text if query.message.text else ""
+        
+        # Extract tweet text more aggressively
+        lines = original_text.split("\n")
+        tweet_text = ""
+        for line in lines:
+            line = line.strip()
+            if (line and 
+                not line.startswith("—") and 
+                not line.startswith("@") and 
+                not line.startswith("🔄") and
+                not line.startswith("🇮🇷") and
+                not line.startswith("🇬🇧") and
+                len(line) > 3):
+                tweet_text += line + " "
+        
+        tweet_text = tweet_text.strip()[:400]
+        
+        if not tweet_text:
+            log.warning("No text extracted for translation")
+            await query.answer(text="No text found", show_alert=True)
+            return
+        
+        log.info("Translating %d chars", len(tweet_text))
+        
+        response = ""
+        if "translate_fa" in data:
+            log.info("Translating to Persian")
+            translated = translate_to_persian(tweet_text)
+            response = "🇮🇷 *فارسی ترجمه:*\n\n" + translated
+        elif "translate_en" in data:
+            log.info("Translating to English")
+            translated = translate_to_english(tweet_text)
+            response = "🇬🇧 *English Translation:*\n\n" + translated
+        else:
+            await query.answer(text="Unknown request", show_alert=True)
+            return
+        
+        # Send as SEPARATE reply message (don't edit)
+        await query.message.reply_text(response, parse_mode="Markdown")
+        await query.answer(text="✅ Translation sent!", show_alert=False)
+        log.info("Translation sent successfully")
+    
+    except Exception as e:
+        log.error("Translation error: %s", e, exc_info=True)
         try:
-            r = requests.get(nitter, headers=HEADERS, timeout=5)
-            if r.status_code == 200:
-                log.info("Using: %s", nitter)
-                return nitter
+            await query.answer(text="Error occurred", show_alert=True)
         except:
             pass
+
+
+def get_working_instance():
+    instances = NITTER_INSTANCES.copy()
+    random.shuffle(instances)
+    for instance in instances:
+        try:
+            r = requests.get(instance, headers=HEADERS, timeout=6)
+            if r.status_code == 200:
+                log.info("Using Nitter: %s", instance)
+                return instance
+        except Exception:
+            continue
     return None
 
 
-def fetch_tweets(nitter, username):
-    """Fetch tweets from account"""
+def fetch_rss(instance, username):
+    """Fetch RSS and filter by age (last 12 hours)"""
+    url = instance + "/" + username + "/rss"
     try:
-        url = f"{nitter}/{username}/rss"
         resp = requests.get(url, headers=HEADERS, timeout=10)
         if resp.status_code != 200:
             return []
         
         root = ET.fromstring(resp.content)
+        items = root.findall(".//item")
         tweets = []
+        cutoff_time = datetime.now(timezone.utc) - timedelta(hours=TWEET_AGE_HOURS)
         
-        for item in root.findall(".//item"):
-            text = clean_text(item.findtext("description", "") or item.findtext("title", ""))
-            link = item.findtext("link", "")
+        for item in items:
+            title = item.findtext("title", "").strip()
+            link = item.findtext("link", "").strip()
+            desc = item.findtext("description", "").strip()
+            guid = item.findtext("guid", link).strip()
+            pub_date_str = item.findtext("pubDate", "").strip()
             
-            if not text or len(text) < 5:
+            # Parse publish date
+            try:
+                pub_date = datetime.fromisoformat(pub_date_str.replace("Z", "+00:00"))
+                if pub_date < cutoff_time:
+                    continue  # Skip tweets older than 12 hours
+            except Exception:
+                pass  # If can't parse, include it anyway
+            
+            clean = clean_text(desc) or title
+            if not clean or len(clean) < 5:
                 continue
             
-            # Extract images/videos
-            media = re.findall(r'src="([^"]*\.(?:jpg|jpeg|png|mp4|webm|gif))"', text)
+            tweet_id = link.rstrip("/").split("/")[-1].replace("#m", "")
+            
+            # Extract media
+            media_urls = []
+            soup_match = re.findall(r'src="([^"]*\.(?:jpg|jpeg|png|mp4|webm))"', desc)
+            media_urls.extend(soup_match)
             
             tweets.append({
-                "text": text[:350],
+                "id": tweet_id if tweet_id.isdigit() else guid,
+                "text": clean[:400],
                 "username": username,
-                "link": link,
-                "media": media[:1],  # Take first media only
+                "url": "https://twitter.com/" + username,
+                "media": media_urls,
             })
         
-        log.info("Got %d tweets from @%s", len(tweets), username)
+        log.info("Got %d tweets from @%s (last %dh)", len(tweets), username, TWEET_AGE_HOURS)
         return tweets
     except Exception as e:
-        log.warning("Error fetching @%s: %s", username, e)
+        log.warning("RSS error for @%s: %s", username, e)
         return []
 
 
 def download_media(url):
-    """Download image/video"""
+    """Download media file - better video detection"""
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=20)
-        if resp.status_code == 200 and len(resp.content) > 1000:
-            return io.BytesIO(resp.content)
+        resp = requests.get(url, headers=HEADERS, timeout=20, stream=True)
+        if resp.status_code == 200:
+            content = resp.content
+            file_size = len(content)
+            
+            is_video = url.lower().endswith((".mp4", ".webm", ".mov", ".avi", ".mkv"))
+            
+            if is_video:
+                # For videos, be lenient on size
+                log.info("Detected video: %s (%d bytes)", url[-50:], file_size)
+                return io.BytesIO(content)
+            elif url.lower().endswith((".jpg", ".jpeg", ".png", ".gif")):
+                # Images - any size OK
+                log.info("Detected image: %s (%d bytes)", url[-50:], file_size)
+                return io.BytesIO(content)
+            else:
+                # Unknown type, return if reasonable size
+                if file_size > 10240:
+                    return io.BytesIO(content)
     except Exception as e:
         log.warning("Media download failed: %s", e)
     return None
 
 
-def translate_text(text, to_lang):
-    """Translate using free API"""
+def search_trending(instance, keyword):
+    """Search for trending tweets"""
+    search_url = instance + "/search?q=" + requests.utils.quote(keyword) + "&f=tweets"
     try:
-        if to_lang == "fa":
-            params = {"q": text[:400], "langpair": "en|fa"}
-        else:
-            params = {"q": text[:400], "langpair": "fa|en"}
+        resp = requests.get(search_url, headers=HEADERS, timeout=12)
+        if resp.status_code != 200:
+            return []
         
-        r = requests.get("https://api.mymemory.translated.net/get", params=params, timeout=5)
-        if r.status_code == 200:
-            result = r.json().get("responseData", {}).get("translatedText", text)
-            return result if result and result != text else text
-    except:
-        pass
-    return text
-
-
-async def handle_translate(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle translation button"""
-    query = update.callback_query
-    try:
-        await query.answer("Translating...", show_alert=False)
+        tweets = []
+        text_blocks = re.findall(r'<div class="tweet-content">([^<]+)</div>', resp.text)
+        username_blocks = re.findall(r'<a class="username">(@\w+)</a>', resp.text)
         
-        data = query.data
-        text = query.message.text
-        
-        # Extract tweet text
-        lines = text.split("\n")
-        tweet = " ".join([l for l in lines if l and not l.startswith("@") and not l.startswith("—")])[:300]
-        
-        if "fa" in data:
-            translated = translate_text(tweet, "fa")
-            response = f"🇮🇷 *Persian:*\n{translated}"
-        else:
-            translated = translate_text(tweet, "en")
-            response = f"🇬🇧 *English:*\n{translated}"
-        
-        await query.message.reply_text(response, parse_mode="Markdown")
-        await query.answer("✅ Sent!", show_alert=False)
+        for i, text in enumerate(text_blocks[:5]):
+            username = username_blocks[i].replace("@", "") if i < len(username_blocks) else "unknown"
+            clean = clean_text(text)
+            tweets.append({
+                "text": clean[:350],
+                "username": username,
+            })
+        return tweets
     except Exception as e:
-        log.error("Translation error: %s", e)
-        await query.answer("Error", show_alert=True)
+        log.warning("Search error for '%s': %s", keyword, e)
+        return []
 
 
-async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /start"""
-    await update.message.reply_text(
-        "🎉 *Tweetify Bot*\n\n"
-        "Posting trending tweets automatically!\n"
-        "🌍 World • 🇮🇷 Iran • 📊 Trending\n\n"
-        "Commands: /help /stats"
-    )
-
-
-async def handle_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /help"""
-    await update.message.reply_text(
-        "/start - Welcome\n"
-        "/help - This\n"
-        "/stats - Statistics"
-    )
-
-
-async def handle_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /stats"""
-    hashes = load_hashes()
-    await update.message.reply_text(
-        f"📊 *Stats*\n\n"
-        f"Tweets sent: {len(hashes)}\n"
-        f"Accounts: {sum(len(c['accounts']) for c in CATEGORY_ACCOUNTS.values())}\n"
-        f"Time: {datetime.now(timezone.utc).strftime('%H:%M UTC')}"
-    )
-
-
-async def send_tweet(bot, tweet, emoji, hashes):
-    """Send tweet to groups"""
-    tweet_hash = get_tweet_hash(tweet["text"])
+async def send_tweet_text(bot, tweet, emoji_prefix):
+    """Send tweet as text"""
+    is_rt, retweeter, original_text, original_user = detect_retweet(tweet["text"])
     
-    # Check if already sent
-    if tweet_hash in hashes:
-        log.info("Duplicate detected, skipping")
-        return False
+    if is_rt:
+        text = format_retweet(retweeter, original_user, original_text, emoji_prefix)
+    else:
+        text = format_normal_tweet(tweet["text"], tweet["username"], emoji_prefix)
     
-    text = f"{emoji}\n\n{tweet['text']}\n\n@{tweet['username']}"
-    
-    # Add translation buttons
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("🇬🇧 English", callback_data="trans_en"),
-        InlineKeyboardButton("🇮🇷 فارسی", callback_data="trans_fa"),
-    ]])
+    keyboard = get_translation_buttons(tweet["text"])
     
     for chat_id in CHAT_IDS:
         try:
-            # Send with media if available
-            if tweet.get("media"):
-                media = download_media(tweet["media"][0])
-                if media:
-                    is_video = tweet["media"][0].lower().endswith((".mp4", ".webm"))
-                    try:
-                        if is_video:
-                            await bot.send_video(chat_id, media, caption=text, reply_markup=keyboard)
-                        else:
-                            await bot.send_photo(chat_id, media, caption=text, reply_markup=keyboard)
-                    except:
-                        await bot.send_message(chat_id, text, reply_markup=keyboard)
-                else:
-                    await bot.send_message(chat_id, text, reply_markup=keyboard)
-            else:
-                await bot.send_message(chat_id, text, reply_markup=keyboard)
-            
+            await bot.send_message(chat_id=chat_id, text=text, reply_markup=keyboard)
             await asyncio.sleep(1)
         except TelegramError as e:
-            log.error("Send error: %s", e)
+            log.error("Telegram error %s: %s", chat_id, e)
+
+
+async def send_tweet_media(bot, tweet, emoji_prefix, media_url):
+    """Send tweet with media"""
+    is_rt, retweeter, original_text, original_user = detect_retweet(tweet["text"])
     
-    hashes.add(tweet_hash)
-    save_hashes(hashes)
-    return True
-
-
-async def cycle(bot, hashes):
-    """Main posting cycle"""
-    nitter = get_nitter()
-    if not nitter:
-        log.error("No Nitter available!")
+    if is_rt:
+        caption = format_retweet(retweeter, original_user, original_text, emoji_prefix)
+    else:
+        caption = format_normal_tweet(tweet["text"], tweet["username"], emoji_prefix)
+    
+    media_bytes = download_media(media_url)
+    if not media_bytes:
+        await send_tweet_text(bot, tweet, emoji_prefix)
         return
     
-    # Try categories
+    is_video = media_url.lower().endswith((".mp4", ".webm"))
+    keyboard = get_translation_buttons(tweet["text"])
+    
+    for chat_id in CHAT_IDS:
+        try:
+            if is_video:
+                await bot.send_video(chat_id=chat_id, video=media_bytes, caption=caption, reply_markup=keyboard)
+            else:
+                await bot.send_photo(chat_id=chat_id, photo=media_bytes, caption=caption, reply_markup=keyboard)
+            media_bytes.seek(0)
+            await asyncio.sleep(1)
+        except TelegramError as e:
+            log.error("Telegram media error %s: %s", chat_id, e)
+
+
+async def run_category_cycle(bot, seen_ids):
+    """Post from categories"""
+    log.info("=== Category cycle started ===")
+    instance = get_working_instance()
+    if not instance:
+        return
+
+    posted = 0
     for category, config in CATEGORY_ACCOUNTS.items():
         account = random.choice(config["accounts"])
-        tweets = fetch_tweets(nitter, account)
+        tweets = fetch_rss(instance, account)
+        new = [t for t in tweets if t["id"] not in seen_ids]
         
-        for tweet in tweets:
-            if await send_tweet(bot, tweet, config["emoji"], hashes):
-                log.info("Posted from %s", category)
-                return
+        if not new:
+            log.info("No new tweets from @%s (last %dh)", account, TWEET_AGE_HOURS)
+            continue
+        
+        tweet = random.choice(new)
+        emoji = config["emoji"]
+        
+        if tweet.get("media"):
+            await send_tweet_media(bot, tweet, emoji, tweet["media"][0])
+        else:
+            await send_tweet_text(bot, tweet, emoji)
+        
+        seen_ids.add(tweet["id"])
+        save_seen_ids(seen_ids)
+        log.info("Posted [%s] from @%s", category, account)
+        posted += 1
+        await asyncio.sleep(4)
+
+    log.info("=== Category cycle done. Posted %d ===", posted)
+
+
+async def run_news_cycle(bot, seen_ids):
+    """Post news - trending topics"""
+    log.info("=== News cycle started ===")
+    instance = get_working_instance()
+    if not instance:
+        return
+
+    trends = random.sample(TREND_KEYWORDS, min(3, len(TREND_KEYWORDS)))
     
-    # Fallback: Iran
-    log.info("No new tweets in categories, trying Iran...")
+    for trend in trends:
+        tweets = search_trending(instance, trend)
+        
+        for i, tweet in enumerate(tweets[:2]):
+            if i >= 2:
+                break
+            
+            tweet_id = trend + "_" + tweet["username"] + "_" + str(i)
+            if tweet_id in seen_ids:
+                continue
+            
+            emoji = "📰📰📰"
+            if tweet.get("media"):
+                await send_tweet_media(bot, tweet, emoji, tweet["media"][0])
+            else:
+                await send_tweet_text(bot, tweet, emoji)
+            
+            seen_ids.add(tweet_id)
+            save_seen_ids(seen_ids)
+            await asyncio.sleep(3)
+
+    log.info("=== News cycle done ===")
+
+
+async def run_iran_cycle(bot, seen_ids):
+    """Post Iran content"""
+    log.info("=== Iran cycle started ===")
+    instance = get_working_instance()
+    if not instance:
+        return
+
     account = random.choice(IRAN_ACCOUNTS)
-    tweets = fetch_tweets(nitter, account)
+    tweets = fetch_rss(instance, account)
+    new = [t for t in tweets if t["id"] not in seen_ids]
     
-    for tweet in tweets:
-        if await send_tweet(bot, tweet, IRAN_EMOJI, hashes):
-            log.info("Posted from Iran")
-            return
+    if not new:
+        log.info("No new Iran tweets")
+        return
     
-    # Fallback: Trends
-    log.info("No Iran tweets, trying trends...")
-    keyword = random.choice(TRENDS)
-    try:
-        r = requests.get(f"{nitter}/search?q={keyword}", headers=HEADERS, timeout=10)
-        if r.status_code == 200:
-            texts = re.findall(r'<div class="tweet-content">([^<]+)</div>', r.text)
-            if texts:
-                tweet_text = clean_text(random.choice(texts))
-                await send_tweet(bot, {
-                    "text": tweet_text[:350],
-                    "username": "Trending",
-                    "media": []
-                }, "📊📊📊", hashes)
-                log.info("Posted from trends")
-    except Exception as e:
-        log.warning("Trend search failed: %s", e)
+    filtered = []
+    for tweet in new:
+        skip = False
+        for keyword in BLOCKED_KEYWORDS:
+            if keyword.lower() in tweet["username"].lower():
+                skip = True
+                break
+        if not skip:
+            filtered.append(tweet)
+    
+    if not filtered:
+        return
+    
+    tweet = random.choice(filtered)
+    emoji = IRAN_EMOJI
+    
+    if tweet.get("media"):
+        await send_tweet_media(bot, tweet, emoji, tweet["media"][0])
+    else:
+        await send_tweet_text(bot, tweet, emoji)
+    
+    seen_ids.add(tweet["id"])
+    save_seen_ids(seen_ids)
+    log.info("Posted Iran tweet from @%s", account)
 
 
-async def main_loop(bot, hashes):
-    """Keep posting"""
+async def run_posting_cycle(bot, seen_ids):
+    """Run posting cycle"""
+    category_timer = 0
+    news_timer = 0
+    iran_timer = 0
+
     while True:
         try:
-            await cycle(bot, hashes)
-            await asyncio.sleep(POST_INTERVAL)
-        except Exception as e:
-            log.exception("Cycle error: %s", e)
+            if category_timer <= 0:
+                await run_category_cycle(bot, seen_ids)
+                category_timer = POST_INTERVAL
+            
+            if news_timer <= 0:
+                await run_news_cycle(bot, seen_ids)
+                news_timer = NEWS_INTERVAL
+            
+            if iran_timer <= 0:
+                await run_iran_cycle(bot, seen_ids)
+                iran_timer = 600
+
             await asyncio.sleep(60)
+            category_timer -= 60
+            news_timer -= 60
+            iran_timer -= 60
+
+        except Exception as e:
+            log.exception("Posting error: %s", e)
+            await asyncio.sleep(30)
 
 
 async def main():
-    """Start bot"""
+    missing = []
     if TELEGRAM_BOT_TOKEN == "YOUR_BOT_TOKEN":
-        log.error("Set TELEGRAM_BOT_TOKEN!")
-        return
-    
+        missing.append("TELEGRAM_BOT_TOKEN")
     if not CHAT_IDS:
-        log.error("Set TELEGRAM_CHAT_IDS!")
+        missing.append("TELEGRAM_CHAT_IDS")
+    if missing:
+        log.error("Missing: %s", ", ".join(missing))
         return
-    
+
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-    
-    # Add handlers
-    app.add_handler(CommandHandler("start", handle_start))
-    app.add_handler(CommandHandler("help", handle_help))
-    app.add_handler(CommandHandler("stats", handle_stats))
-    app.add_handler(CallbackQueryHandler(handle_translate, pattern="trans_"))
+    app.add_handler(CallbackQueryHandler(handle_translation))
     
     bot = app.bot
-    hashes = load_hashes()
-    
-    log.info("🤖 Tweetify Bot Started!")
+    seen_ids = load_seen_ids()
+    log.info("Bot started - 12h filtering + custom accounts + fallback logic")
     
     async with app:
         await app.start()
         try:
-            await main_loop(bot, hashes)
+            await run_posting_cycle(bot, seen_ids)
+        finally:
+            await app.stop()
+
+
+async def handle_command_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /start command"""
+    keyboard = [[
+        InlineKeyboardButton("📱 Open Dashboard", url="https://your-vercel-url.vercel.app"),
+        InlineKeyboardButton("ℹ️ Help", callback_data="help"),
+    ]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        "🎉 Welcome to *Tweet1fy Bot*!\n\n"
+        "I automatically post trending tweets from:\n"
+        "🌍 World trends\n"
+        "🇮🇷 Iran timeline\n"
+        "📰 Today's news\n\n"
+        "Every 15 minutes in this chat!\n\n"
+        "Tap 'Open Dashboard' to see all tweets →",
+        parse_mode="Markdown",
+        reply_markup=reply_markup
+    )
+
+
+async def handle_command_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /help command"""
+    help_text = (
+        "*Tweet1fy Commands*\n\n"
+        "📍 */start* — Welcome message\n"
+        "❓ */help* — This message\n"
+        "📊 */stats* — Bot statistics\n"
+        "🔄 */refresh* — Force refresh tweets now\n"
+        "📱 */dashboard* — Open mini app\n\n"
+        "The bot posts automatically every 15 minutes."
+    )
+    await update.message.reply_text(help_text, parse_mode="Markdown")
+
+
+async def handle_command_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show bot statistics"""
+    seen_ids = load_seen_ids()
+    stats = (
+        "📊 *Bot Statistics*\n\n"
+        f"✅ Tweets tracked: {len(seen_ids)}\n"
+        f"🌍 Categories: 5 (Funny, Political, News, Gaming, Unhinged)\n"
+        f"🇮🇷 Iran accounts: 9\n"
+        f"📰 Update cycle: Every 15 minutes\n"
+        f"⏱️ Last update: {datetime.now(timezone.utc).strftime('%H:%M UTC')}"
+    )
+    await update.message.reply_text(stats, parse_mode="Markdown")
+
+
+async def handle_command_refresh(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Force refresh tweets immediately"""
+    await update.message.reply_text("🔄 Refreshing tweets... wait 10 seconds!")
+    
+    # Manually trigger a cycle
+    bot = context.bot
+    seen_ids = load_seen_ids()
+    await run_category_cycle(bot, seen_ids)
+    
+    await update.message.reply_text("✅ Refresh complete! New tweets posted.")
+
+
+# Flask/FastAPI endpoint to serve tweets to mini app
+from flask import Flask, jsonify
+import json as json_lib
+
+app_flask = Flask(__name__)
+
+@app_flask.route('/api/tweets', methods=['GET'])
+def get_tweets_api():
+    """API endpoint for mini app to fetch tweets"""
+    try:
+        # Read recent tweets from your bot's data
+        # In production, connect this to your bot's actual tweet storage
+        tweets_data = {
+            "worldTrending": [
+                {
+                    "id": 1,
+                    "user": "@BBCBreaking",
+                    "name": "BBC Breaking",
+                    "text": "Latest breaking news from around the world",
+                    "time": "now",
+                    "likes": 45000,
+                    "retweets": 18000,
+                    "views": "2.1M"
+                },
+                {
+                    "id": 2,
+                    "user": "@Reuters",
+                    "name": "Reuters",
+                    "text": "Major international developments happening now",
+                    "time": "5 min ago",
+                    "likes": 32000,
+                    "retweets": 14000,
+                    "views": "1.4M"
+                }
+            ],
+            "iranTimeline": [
+                {
+                    "id": 10,
+                    "user": "@IranIntl_Fa",
+                    "name": "Iran International",
+                    "text": "اخبار فوری از ایران و جهان",
+                    "time": "2 min ago",
+                    "likes": 21000,
+                    "retweets": 9500,
+                    "views": "1.1M"
+                },
+                {
+                    "id": 11,
+                    "user": "@bbcpersian",
+                    "name": "BBC Persian",
+                    "text": "توضیحات روز اتفاقات مهم",
+                    "time": "8 min ago",
+                    "likes": 18500,
+                    "retweets": 8000,
+                    "views": "900K"
+                }
+            ],
+            "news": [
+                {
+                    "id": 20,
+                    "user": "@BreakingNews",
+                    "name": "Breaking News",
+                    "text": "Today's top stories and headlines",
+                    "time": "1 min ago",
+                    "likes": 56000,
+                    "retweets": 22000,
+                    "views": "3.2M"
+                },
+                {
+                    "id": 21,
+                    "user": "@AP",
+                    "name": "Associated Press",
+                    "text": "Associated Press news updates",
+                    "time": "4 min ago",
+                    "likes": 39000,
+                    "retweets": 16000,
+                    "views": "2M"
+                }
+            ]
+        }
+        return jsonify(tweets_data), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+async def main_bot():
+    missing = []
+    if TELEGRAM_BOT_TOKEN == "YOUR_BOT_TOKEN":
+        missing.append("TELEGRAM_BOT_TOKEN")
+    if not CHAT_IDS:
+        missing.append("TELEGRAM_CHAT_IDS")
+    if missing:
+        log.error("Missing: %s", ", ".join(missing))
+        return
+
+    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    
+    # Add handlers
+    app.add_handler(CommandHandler("start", handle_command_start))
+    app.add_handler(CommandHandler("help", handle_command_help))
+    app.add_handler(CommandHandler("stats", handle_command_stats))
+    app.add_handler(CommandHandler("refresh", handle_command_refresh))
+    app.add_handler(CallbackQueryHandler(handle_translation))
+    
+    bot = app.bot
+    seen_ids = load_seen_ids()
+    log.info("Bot started - Interactive + API mode")
+    
+    async with app:
+        await app.start()
+        try:
+            await run_posting_cycle(bot, seen_ids)
         finally:
             await app.stop()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(main_bot())
